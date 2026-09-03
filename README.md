@@ -37,6 +37,8 @@ dist\PacketLizer.exe
 |---|---|
 | `pythonw main.py` | Monitor + icone na bandeja (modo normal) |
 | `python main.py --monitor` | So o monitor, em primeiro plano, com logs (Ctrl+C encerra salvando) |
+| `python main.py --monitor --duration 3600` | Monitor headless com prazo de execucao (encerra apos 1 h) |
+| `python main.py --monitor --target 1.1.1.1 --interval 2` | Sobrescreve alvo/intervalo so nesta execucao |
 | `python main.py --report --format both` | Gera relatorio HTML + PDF (+ CSV) na pasta atual |
 | `python main.py --report --days 7` | Relatorio so dos ultimos 7 dias |
 | `python main.py --export-csv --out saida.csv` | Exporta todas as amostras para CSV |
@@ -47,11 +49,17 @@ dist\PacketLizer.exe
 
 ### Janela principal
 
-O icone fica no tray e **nao aparece na barra de tarefas**. Clicando nele abre a
-janela principal, que mostra:
+O icone fica no tray e a janela **nao aparece na barra de tarefas** (janela do
+tipo *tool window*). Na primeira execucao a janela abre para voce definir o
+alvo; depois disso ela **inicia escondida** — clique no icone do tray para
+abri-la. A janela mostra:
 
 * o **estado atual** (Em execucao / Instavel / QUEDA em andamento / Em pausa),
   com um indicador colorido;
+* **Configuracao editavel**: campo de texto para o **alvo (dominio ou IP)**,
+  intervalo entre pings, timeout por ping, nº de perdas seguidas para contar
+  uma queda e dias de retencao do historico. **Salvar e aplicar** grava o
+  `config.json`; se o alvo/intervalo/timeout mudou, o monitor reinicia sozinho;
 * alvo, metodo de sondagem, ultima amostra, % de perda, nº de quedas e ha quanto
   tempo esta monitorando;
 * **Pausar / Retomar** o monitoramento (standby);
@@ -63,6 +71,11 @@ janela principal, que mostra:
 Fechar a janela no `X` apenas a esconde de volta para o tray; o monitoramento
 continua. Sem ambiente grafico (`tkinter` ausente), o programa cai para um menu
 simples no proprio icone do tray.
+
+> **Modo `--monitor`** e proposital: roda *headless* (sem janela e sem icone),
+> so escrevendo logs no console — inclusive uma linha `[status]` a cada 15 s
+> para voce ver que esta vivo. Use o modo normal (sem argumentos) para ter a
+> janela e o tray.
 
 ## Metodo de sondagem
 

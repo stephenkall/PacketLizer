@@ -90,10 +90,10 @@ def _cmd_autostart(cfg: Config, args, enable: bool) -> int:
     return 0 if ok else 1
 
 
-def _cmd_monitor(cfg: Config, _args) -> int:
+def _cmd_monitor(cfg: Config, args) -> int:
     from packetlizer.monitor import run_monitor_foreground
 
-    return run_monitor_foreground(cfg)
+    return run_monitor_foreground(cfg, duration=args.duration)
 
 
 def _cmd_tray(cfg: Config, _args) -> int:
@@ -122,12 +122,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--until", help="Data/hora final (ISO 8601).")
     p.add_argument("--mode", choices=["auto", "script", "exe"], default="auto", help="Modo de autostart.")
     p.add_argument("--startup-folder", action="store_true", help="Usa a pasta Inicializar em vez do registro.")
+
+    o = p.add_argument_group("sobrescreve a configuracao para esta execucao")
+    o.add_argument("--target", help="Dominio ou IP a ser sondado (ex.: www.vivo.com.br).")
+    o.add_argument("--interval", type=float, help="Segundos entre cada ping.")
+    o.add_argument("--timeout", type=int, help="Timeout de cada ping em ms.")
+    o.add_argument("--duration", type=int, default=None,
+                   help="Com --monitor: encerra automaticamente apos N segundos (prazo de execucao).")
     return p
+
+
+def _apply_overrides(cfg: Config, args) -> None:
+    if args.target:
+        cfg.target = args.target.strip()
+    if args.interval:
+        cfg.interval_seconds = max(0.2, args.interval)
+    if args.timeout:
+        cfg.timeout_ms = max(200, args.timeout)
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config(args.config_file)
+    _apply_overrides(cfg, args)
 
     if args.config:
         return _cmd_config(cfg, args)

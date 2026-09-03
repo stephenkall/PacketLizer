@@ -175,12 +175,22 @@ class Monitor:
                             s.consecutive_lost, STATUS_LABEL.get(res.status, "?"))
 
 
-def run_monitor_foreground(cfg: Config) -> int:
+def run_monitor_foreground(cfg: Config, duration: float | None = None) -> int:
+    """Modo headless (--monitor): sem janela nem icone, so logs no console.
+
+    `duration` (segundos) encerra automaticamente ao fim do prazo.
+    """
+    import sys
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        stream=sys.stdout,
     )
+    print(f"PacketLizer -- monitor headless. Alvo={cfg.target} intervalo={cfg.interval_seconds}s "
+          f"db={cfg.resolved_db_path()}" + (f" prazo={duration}s" if duration else ""), flush=True)
+
     mon = Monitor(cfg)
 
     def _handler(_sig, _frm):
@@ -193,8 +203,28 @@ def run_monitor_foreground(cfg: Config) -> int:
     if platform.system() != "Windows":
         signal.signal(signal.SIGTERM, _handler)
 
+    t = threading.Thread(target=mon.run, name="monitor-run", daemon=True)
+    t.start()
+
+    start = time.monotonic()
+    last_hb = start
     try:
-        mon.run()
+        while t.is_alive():
+            t.join(timeout=5)
+            now = time.monotonic()
+            s = mon.state
+            if s.total and (now - last_hb) >= 15:
+                last_hb = now
+                log.info("[status] %s | amostras=%d perda=%.2f%% quedas=%d ultima=%s",
+                         s.state_name, s.total, s.loss_pct, s.outages,
+                         STATUS_LABEL.get(s.last_status, "?"))
+            if duration and (now - start) >= duration:
+                log.info("Prazo de execucao de %ss atingido; encerrando.", duration)
+                mon.request_stop()
+                break
     except SystemExit:
+        mon.request_stop()
+        t.join(timeout=8)
         return 1
+    t.join(timeout=8)
     return 0

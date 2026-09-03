@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "PacketLizer - bandeja (tray)",
+      "name": "PacketLizer - bandeja + janela (modo normal)",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/main.py",
@@ -12,11 +12,21 @@
       "envFile": "${workspaceFolder}/.env"
     },
     {
-      "name": "PacketLizer - monitor (foreground)",
+      "name": "PacketLizer - monitor headless (so logs, sem janela)",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/main.py",
       "args": ["--monitor"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "PacketLizer - monitor headless por 2 min",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "args": ["--monitor", "--duration", "120", "--target", "www.vivo.com.br"],
       "console": "integratedTerminal",
       "justMyCode": false,
       "envFile": "${workspaceFolder}/.env"
