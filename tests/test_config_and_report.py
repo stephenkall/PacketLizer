@@ -1,9 +1,28 @@
 import csv
+from datetime import datetime
 
 from packetlizer.config import Config, load_config
-from packetlizer.report import export_csv, generate_reports
+from packetlizer.report import export_csv, generate_reports, parse_report_dates
 from packetlizer.storage import Storage
 from packetlizer.config import STATUS_OK, STATUS_TIMEOUT
+
+
+def test_parse_report_dates_empty_means_open_ended():
+    assert parse_report_dates(None, None) == (None, None)
+    assert parse_report_dates("", "  ") == (None, None)
+
+
+def test_parse_report_dates_date_only_end_is_inclusive():
+    start, end = parse_report_dates("2026-09-01", "2026-09-03")
+    assert start == int(datetime(2026, 9, 1).timestamp())
+    # data final so com dia -> vai ate 23:59:59 daquele dia
+    assert end == int(datetime(2026, 9, 3).timestamp()) + 86399
+
+
+def test_parse_report_dates_accepts_iso_datetime():
+    start, end = parse_report_dates("2026-09-01T08:30:00", "2026-09-01T18:00:00")
+    assert start == int(datetime(2026, 9, 1, 8, 30).timestamp())
+    assert end == int(datetime(2026, 9, 1, 18, 0).timestamp())
 
 
 def test_config_roundtrip(tmp_path):

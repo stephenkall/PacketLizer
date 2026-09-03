@@ -5,6 +5,7 @@ import base64
 import csv
 import io
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,7 +20,13 @@ log = logging.getLogger("packetlizer.report")
 # ---------------------------------------------------------------------------
 # selecao do intervalo
 # ---------------------------------------------------------------------------
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def _parse_dt(value: str | None) -> int | None:
+    if not value:
+        return None
+    value = value.strip()
     if not value:
         return None
     try:
@@ -28,9 +35,22 @@ def _parse_dt(value: str | None) -> int | None:
         return int(datetime.strptime(value, "%Y-%m-%d").timestamp())
 
 
-def _resolve_window(days, since, until) -> tuple[int | None, int | None]:
+def parse_report_dates(since: str | None, until: str | None) -> tuple[int | None, int | None]:
+    """Converte as datas do relatorio em (start_ts, end_ts).
+
+    * data inicial vazia  -> None  (desde o inicio dos tempos)
+    * data final vazia     -> None  (ate o mais atual)
+    * data final so com dia -> inclui o dia inteiro (23:59:59)
+    """
     start = _parse_dt(since)
     end = _parse_dt(until)
+    if end is not None and until and _DATE_ONLY.fullmatch(until.strip()):
+        end += 86399
+    return start, end
+
+
+def _resolve_window(days, since, until) -> tuple[int | None, int | None]:
+    start, end = parse_report_dates(since, until)
     if days and start is None:
         start = int(time.time() - days * 86400)
     return start, end

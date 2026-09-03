@@ -45,8 +45,24 @@ dist\PacketLizer.exe
 | `python main.py --uninstall-autostart` | Desliga o inicio automatico |
 | `python main.py --config` | Mostra a configuracao e os caminhos efetivos |
 
-Pelo menu da bandeja da para gerar relatorio, exportar CSV, abrir a pasta de
-dados, editar a configuracao e ligar/desligar o inicio automatico.
+### Janela principal
+
+O icone fica no tray e **nao aparece na barra de tarefas**. Clicando nele abre a
+janela principal, que mostra:
+
+* o **estado atual** (Em execucao / Instavel / QUEDA em andamento / Em pausa),
+  com um indicador colorido;
+* alvo, metodo de sondagem, ultima amostra, % de perda, nº de quedas e ha quanto
+  tempo esta monitorando;
+* **Pausar / Retomar** o monitoramento (standby);
+* **Encerrar programa** (com confirmacao);
+* **Gerar relatorio** informando **data inicial** e **data final** opcionais:
+  sem data inicial traz desde o inicio dos dados, sem data final vai ate a
+  amostra mais recente. O HTML abre automaticamente ao terminar.
+
+Fechar a janela no `X` apenas a esconde de volta para o tray; o monitoramento
+continua. Sem ambiente grafico (`tkinter` ausente), o programa cai para um menu
+simples no proprio icone do tray.
 
 ## Metodo de sondagem
 

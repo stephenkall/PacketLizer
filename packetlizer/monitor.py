@@ -33,7 +33,20 @@ class LiveState:
     consecutive_lost: int = 0
     in_outage: bool = False
     outages: int = 0
+    paused: bool = False
     started_at: float = field(default_factory=time.time)
+
+    @property
+    def state_name(self) -> str:
+        if self.paused:
+            return "Em pausa (standby)"
+        if self.total == 0:
+            return "Iniciando..."
+        if self.in_outage:
+            return "QUEDA em andamento"
+        if self.consecutive_lost > 0:
+            return "Instavel (perdas recentes)"
+        return "Em execucao"
 
     @property
     def loss_pct(self) -> float:
@@ -45,10 +58,28 @@ class Monitor:
         self.cfg = cfg
         self.state = state or LiveState()
         self._stop = threading.Event()
+        self._pause = threading.Event()
         self._storage: Storage | None = None
 
     def request_stop(self) -> None:
         self._stop.set()
+
+    def pause(self) -> None:
+        self._pause.set()
+
+    def resume(self) -> None:
+        self._pause.clear()
+
+    def toggle_pause(self) -> bool:
+        if self._pause.is_set():
+            self._pause.clear()
+        else:
+            self._pause.set()
+        return self._pause.is_set()
+
+    @property
+    def is_paused(self) -> bool:
+        return self._pause.is_set()
 
     def _apply_retention(self, st: Storage) -> None:
         if self.cfg.retention_days and self.cfg.retention_days > 0:
@@ -78,6 +109,19 @@ class Monitor:
         interval = max(0.2, float(cfg.interval_seconds))
 
         while not self._stop.is_set():
+            if self._pause.is_set():
+                if not self.state.paused:
+                    if pending:
+                        st.commit()
+                        pending = 0
+                    self.state.paused = True
+                    log.info("Monitor em pausa (standby).")
+                self._stop.wait(0.5)
+                continue
+            if self.state.paused:
+                self.state.paused = False
+                log.info("Monitor retomado.")
+
             cycle_start = time.monotonic()
             ts = int(time.time())
             try:
