@@ -1,0 +1,25 @@
+# PacketLizer
+.env
+.cache/
+_reports/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# SO
+Thumbs.db
+.DS_Store

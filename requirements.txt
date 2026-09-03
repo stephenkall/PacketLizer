@@ -1,0 +1,6 @@
+pystray>=0.19.4
+Pillow>=10.0.0
+icmplib>=3.0.4
+matplotlib>=3.7.0
+reportlab>=4.0.0
+tqdm>=4.66.0
