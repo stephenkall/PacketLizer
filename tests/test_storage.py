@@ -1,7 +1,39 @@
+import sqlite3
 import time
 
 from packetlizer.config import STATUS_OK, STATUS_TIMEOUT
 from packetlizer.storage import Storage
+
+
+def test_target_column_and_distinct_targets(tmp_path):
+    with Storage(tmp_path / "t.db") as st:
+        base = 1_700_000_000
+        for i in range(10):
+            st.add(10.0, STATUS_OK, base + i, target="a")
+        for i in range(5):
+            st.add(10.0, STATUS_OK, base + 100 + i, target="b")
+        st.commit()
+        assert st.distinct_targets() == ["a", "b"]
+        assert [s.target for s in st.iter_samples(target="a")] == ["a"] * 10
+        assert len(list(st.iter_samples(target="b"))) == 5
+
+
+def test_migration_backfills_target_from_meta(tmp_path):
+    db = tmp_path / "legacy.db"
+    con = sqlite3.connect(db)
+    con.executescript(
+        "CREATE TABLE samples (ts INTEGER NOT NULL, rtt_ms REAL, status INTEGER NOT NULL);"
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);"
+    )
+    con.execute("INSERT INTO meta VALUES ('target', 'alvo-antigo')")
+    con.executemany("INSERT INTO samples VALUES (?,?,?)",
+                    [(1_700_000_000 + i, 12.0, 0) for i in range(20)])
+    con.commit()
+    con.close()
+
+    with Storage(db) as st:
+        assert st.distinct_targets() == ["alvo-antigo"]
+        assert all(s.target == "alvo-antigo" for s in st.iter_samples())
 
 
 def test_roundtrip_and_range(tmp_path):
