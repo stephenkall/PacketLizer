@@ -1,103 +1,116 @@
 # PacketLizer
 
-Monitor discreto de estabilidade da conexao para **juntar provas de perda de
-pacotes** e apresentar ao provedor (ISP). Fica na bandeja do sistema (ao lado do
-relogio), sonda um alvo configuravel de forma continua, guarda tudo num SQLite
-compacto e gera **relatorios sob demanda em HTML + PDF + CSV**.
+A low-profile connection-stability monitor built to **gather evidence of packet
+loss** to present to your ISP. It lives in the system tray (next to the clock),
+continuously probes a configurable target, stores everything in a compact SQLite
+database and produces **on-demand reports in HTML + PDF + CSV**.
 
-## Por que existe
+## Why it exists
 
-O `ping -t alvo > log.txt` funciona, mas o resultado e um paredao de texto.
-O PacketLizer faz a mesma coisa de forma automatica e transforma os dados num
-dashboard com % de perda, frequencia/horario das quedas, duracao media, MTBF,
-grafico de latencia x tempo (timeout marcado na linha do timeout configurado) e
-um CSV verbose com cada pacote.
+`ping -t target > log.txt` works, but the result is a wall of text. PacketLizer
+does the same thing automatically and turns the data into a dashboard with loss
+%, outage frequency / time of day, average duration, MTBF, a latency-vs-time
+chart (timeouts drawn on the configured timeout line) and a verbose CSV with
+every single packet.
 
-## Instalacao
+## Download
 
-Precisa de Python 3.11+ no Windows. Nao precisa instalar dependencias a mao: o
-programa instala sozinho a partir de `requirements.txt` no primeiro arranque.
+Every push to `main` that passes the tests publishes a **GitHub Release** with a
+ready-to-run `PacketLizer-vX.Y.Z.N.exe` attached — grab the latest from the
+[Releases page](https://github.com/stephenkall/PacketLizer/releases). No Python
+required to run it.
+
+## Install from source
+
+Needs Python 3.11+ on Windows. You don't have to install dependencies by hand —
+the program installs them from `requirements.txt` on first launch.
 
 ```powershell
 git clone https://github.com/stephenkall/PacketLizer.git
 cd PacketLizer
-pythonw main.py            # inicia em segundo plano, so o icone na bandeja
+pythonw main.py            # starts in the background, tray icon only
 ```
 
-Se o ambiente bloquear scripts `.py`, gere um executavel unico:
+### Build the executable yourself
 
 ```powershell
-python build_exe.py        # cria dist\PacketLizer.exe
+python build_exe.py        # produces dist\PacketLizer.exe (single file, no console)
 dist\PacketLizer.exe
 ```
 
-## Uso
+`build_exe.py` bundles only what PacketLizer needs (pystray, Pillow, icmplib,
+matplotlib + numpy, reportlab, plus the stdlib) and explicitly excludes heavy
+unrelated packages that might be installed in your dev environment, so the `.exe`
+stays around ~45 MB.
 
-| Comando | O que faz |
+## Usage
+
+| Command | What it does |
 |---|---|
-| `pythonw main.py` | Monitor + icone na bandeja (modo normal) |
-| `python main.py --monitor` | So o monitor, em primeiro plano, com logs (Ctrl+C encerra salvando) |
-| `python main.py --monitor --duration 3600` | Monitor headless com prazo de execucao (encerra apos 1 h) |
-| `python main.py --monitor --target 1.1.1.1 --interval 2` | Sobrescreve alvo/intervalo so nesta execucao |
-| `python main.py --report --format both` | Gera relatorio HTML + PDF (+ CSV) na pasta atual |
-| `python main.py --report --days 7` | Relatorio so dos ultimos 7 dias |
-| `python main.py --export-csv --out saida.csv` | Exporta todas as amostras para CSV |
-| `python main.py --install-autostart` | Liga o inicio automatico (registro HKCU, sem admin) |
-| `python main.py --install-autostart --startup-folder` | Idem, via pasta Inicializar |
-| `python main.py --uninstall-autostart` | Desliga o inicio automatico |
-| `python main.py --config` | Mostra a configuracao e os caminhos efetivos |
+| `pythonw main.py` | Monitor + tray icon + window (normal mode) |
+| `python main.py --monitor` | Monitor only, foreground, with logs (Ctrl+C stops and saves) |
+| `python main.py --monitor --duration 3600` | Headless monitor with a run deadline (stops after 1 h) |
+| `python main.py --monitor --target 1.1.1.1 --interval 2` | Override target/interval for this run only |
+| `python main.py --report --format both` | Generate an HTML + PDF report (+ CSV) in the current folder |
+| `python main.py --report --days 7` | Report for the last 7 days only |
+| `python main.py --report --since 2026-09-01 --until 2026-09-03` | Report for a date range |
+| `python main.py --export-csv --out data.csv` | Export every sample to CSV |
+| `python main.py --install-autostart` | Enable start-with-Windows (HKCU registry, no admin) |
+| `python main.py --install-autostart --startup-folder` | Same, via the Startup folder |
+| `python main.py --uninstall-autostart` | Disable start-with-Windows |
+| `python main.py --config` | Print the effective configuration and paths |
 
-### Janela principal
+### Main window
 
-O icone fica no tray e a janela **nao aparece na barra de tarefas** (janela do
-tipo *tool window*). Na primeira execucao a janela abre para voce definir o
-alvo; depois disso ela **inicia escondida** — clique no icone do tray para
-abri-la. A janela mostra:
+The icon sits in the tray and the window **does not show up in the taskbar**
+(it's a *tool window*). On first run the window opens so you can set the target;
+after that it **starts hidden** — click the tray icon to open it. The window
+shows:
 
-* o **estado atual** (Em execucao / Instavel / QUEDA em andamento / Em pausa),
-  com um indicador colorido;
-* **Configuracao editavel**: campo de texto para o **alvo (dominio ou IP)**,
-  intervalo entre pings, timeout por ping, nº de perdas seguidas para contar
-  uma queda e dias de retencao do historico. **Salvar e aplicar** grava o
-  `config.json`; se o alvo/intervalo/timeout mudou, o monitor reinicia sozinho;
-* alvo, metodo de sondagem, ultima amostra, % de perda, nº de quedas e ha quanto
-  tempo esta monitorando;
-* **Pausar / Retomar** o monitoramento (standby);
-* **Encerrar programa** (com confirmacao);
-* **Gerar relatorio** informando **data inicial** e **data final** opcionais:
-  sem data inicial traz desde o inicio dos dados, sem data final vai ate a
-  amostra mais recente. O HTML abre automaticamente ao terminar.
+* the **current state** (Running / Unstable / OUTAGE in progress / Paused), with
+  a colored indicator;
+* an **editable configuration** panel: a text field for the **target (domain or
+  IP)**, ping interval, per-ping timeout, number of consecutive losses that
+  counts as an outage, and history retention in days. **Save & apply** writes
+  `config.json`; if the target/interval/timeout changed, the monitor restarts
+  automatically;
+* target, probe method, last sample, loss %, outage count and how long it has
+  been monitoring;
+* **Pause / Resume** the monitoring (standby);
+* **Quit** (with confirmation);
+* **Generate report** with optional **start date** and **end date**: no start
+  date means since the beginning of the data, no end date means up to the most
+  recent sample. The HTML opens automatically when done.
 
-Fechar a janela no `X` apenas a esconde de volta para o tray; o monitoramento
-continua. Sem ambiente grafico (`tkinter` ausente), o programa cai para um menu
-simples no proprio icone do tray.
+Closing the window with `X` just hides it back to the tray; monitoring
+continues. With no GUI environment (`tkinter` missing), the program falls back
+to a simple menu on the tray icon itself.
 
-> **Modo `--monitor`** e proposital: roda *headless* (sem janela e sem icone),
-> so escrevendo logs no console — inclusive uma linha `[status]` a cada 15 s
-> para voce ver que esta vivo. Use o modo normal (sem argumentos) para ter a
-> janela e o tray.
+> **`--monitor` mode is headless on purpose**: no window and no tray icon, it
+> only writes logs to the console — including a `[status]` line every 15 s so you
+> can see it's alive. Use normal mode (no arguments) for the window and tray.
 
-## Metodo de sondagem
+## Probe method
 
-No arranque o programa decide sozinho:
+At startup the program decides on its own:
 
-* **ICMP raw** (via `icmplib`) quando o processo tem privilegio de
-  administrador — timestamps mais precisos;
-* **`ping` do sistema operacional** (parse da saida, funciona em qualquer
-  locale) quando **nao** ha privilegio. Sem exigir nada do usuario.
+* **Raw ICMP** (via `icmplib`) when the process has administrator privileges —
+  more precise timestamps;
+* the **operating system's `ping`** (output parsing, locale-independent) when it
+  does **not** have privileges. Nothing is required from the user.
 
-Se o ICMP raw perder permissao em execucao, o monitor troca para o `ping`
-automaticamente.
+If raw ICMP loses permission at runtime, the monitor switches to `ping`
+automatically.
 
-## Onde ficam os dados
+## Where the data lives
 
-`%LOCALAPPDATA%\PacketLizer\` (fora do repositorio):
+`%LOCALAPPDATA%\PacketLizer\` (outside the repository):
 
 ```
-config.json              parametros (alvo, intervalo, timeout, retencao, ...)
+config.json              parameters (target, interval, timeout, retention, ...)
 packetlizer.db           SQLite: samples(ts, rtt_ms, status, target) + meta
-packetlizer.log          log da aplicacao
-reports\                 relatorios gerados pelo menu da bandeja
+packetlizer.log          application log
+reports\                 reports generated from the tray/window
 ```
 
 `config.json`:
@@ -114,45 +127,55 @@ reports\                 relatorios gerados pelo menu da bandeja
 }
 ```
 
-As alteracoes feitas na janela sao gravadas neste arquivo (ao clicar em **Salvar
-e aplicar** e tambem ao **Encerrar programa**) e recarregadas no proximo
-arranque — nada se perde entre execucoes.
+Changes made in the window are written to this file (on **Save & apply** and
+also on **Quit**) and reloaded on the next launch — nothing is lost between
+runs.
 
-Uma **queda (outage)** e uma sequencia de `outage_min_consecutive` ou mais
-perdas seguidas. `timeout_ms` e o timeout de cada ping **e** o valor de latencia
-usado no grafico para marcar um pacote perdido. `retention_days` apaga o
-historico mais antigo no arranque e compacta o banco (VACUUM); **`0` = retencao
-ilimitada** (nada e apagado).
+An **outage** is a run of `outage_min_consecutive` or more consecutive losses.
+`timeout_ms` is both the per-ping timeout **and** the latency value used on the
+chart to mark a lost packet. `retention_days` deletes older history at startup
+and compacts the database (VACUUM); **`0` = unlimited retention** (nothing is
+deleted).
 
-## O relatorio
+## The report
 
-Cada amostra guarda o **alvo** contra o qual foi sondada. Se voce trocou o alvo
-ao longo do tempo, o relatorio traz **um bloco separado por alvo** (dashboard +
-grafico + tabelas de cada um), usando somente as amostras daquele alvo — os
-dados antigos nao sao reetiquetados com o alvo novo. Bancos criados por versoes
-anteriores tem o historico atribuido automaticamente ao ultimo alvo em uso.
+Each sample records the **target** it was probed against. If you changed the
+target over time, the report contains **a separate block per target** (dashboard
++ chart + tables for each), using only that target's samples — old data is not
+relabeled with the new target. Databases created by earlier versions have their
+history assigned automatically to the last target in use.
 
-Cada bloco tem:
+Each block has:
 
-1. **Dashboard**: % de perda, disponibilidade, nº de quedas, quedas/dia, tempo
-   total fora do ar, duracao media/mediana/maxima da queda, intervalo medio
-   entre quedas, MTBF, horario e dia da semana mais criticos, latencia p50/p95
-   e jitter.
-2. **Grafico** latencia x tempo, com pacotes perdidos plotados na linha de
-   timeout (`timeout_ms`, ex.: 2000 ms) e as janelas de queda sombreadas;
-   abaixo, perda % por hora de calendario.
-3. **Tabelas**: cada queda, resumo diario, distribuicao por status.
+1. **Dashboard**: loss %, availability, outage count, outages/day, total
+   downtime, mean/median/max outage duration, mean interval between outages,
+   MTBF, most critical hour and weekday, latency p50/p95 and jitter.
+2. **Chart** latency vs time, with lost packets plotted on the timeout line
+   (`timeout_ms`, e.g. 2000 ms) and outage windows shaded; below it, loss % per
+   calendar hour.
+3. **Tables**: every outage, daily summary, status breakdown.
 
-O **CSV verbose** (`timestamp_iso, timestamp_epoch, target, rtt_ms, status_code,
-status`, uma linha por pacote) e sempre gerado junto do HTML/PDF e cobre todos
-os alvos.
+The **verbose CSV** (`timestamp_iso, timestamp_epoch, target, rtt_ms,
+status_code, status`, one row per packet) is always generated alongside the
+HTML/PDF and covers all targets.
 
-## Desenvolvimento
+## Development
 
 ```powershell
 pip install -r requirements.txt pytest
 pytest -q
 ```
 
-CI (GitHub Actions): testes em Python 3.11/3.12 (Ubuntu) e build do
-`PacketLizer.exe` (Windows) publicado como artefato a cada push na `main`.
+### CI/CD (GitHub Actions)
+
+`.github/workflows/ci.yml`:
+
+* **`test`** — runs `pytest` on Python 3.11 and 3.12 (Ubuntu) for every push and
+  pull request.
+* **`release`** — on every push to `main` that passes `test`, builds
+  `PacketLizer.exe` on Windows, smoke-tests it (`--config`), and publishes a
+  **GitHub Release** tagged `v<__version__>.<run number>` with the versioned
+  `.exe` attached and marked as *latest*.
+
+Bump `packetlizer.__version__` in `packetlizer/__init__.py` when you want the
+`X.Y.Z` part of the release tag to change.
