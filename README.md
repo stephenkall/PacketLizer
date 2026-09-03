@@ -95,7 +95,7 @@ automaticamente.
 
 ```
 config.json              parametros (alvo, intervalo, timeout, retencao, ...)
-packetlizer.db           SQLite: samples(ts, rtt_ms, status) + meta
+packetlizer.db           SQLite: samples(ts, rtt_ms, status, target) + meta
 packetlizer.log          log da aplicacao
 reports\                 relatorios gerados pelo menu da bandeja
 ```
@@ -126,6 +126,14 @@ ilimitada** (nada e apagado).
 
 ## O relatorio
 
+Cada amostra guarda o **alvo** contra o qual foi sondada. Se voce trocou o alvo
+ao longo do tempo, o relatorio traz **um bloco separado por alvo** (dashboard +
+grafico + tabelas de cada um), usando somente as amostras daquele alvo — os
+dados antigos nao sao reetiquetados com o alvo novo. Bancos criados por versoes
+anteriores tem o historico atribuido automaticamente ao ultimo alvo em uso.
+
+Cada bloco tem:
+
 1. **Dashboard**: % de perda, disponibilidade, nº de quedas, quedas/dia, tempo
    total fora do ar, duracao media/mediana/maxima da queda, intervalo medio
    entre quedas, MTBF, horario e dia da semana mais criticos, latencia p50/p95
@@ -134,8 +142,10 @@ ilimitada** (nada e apagado).
    timeout (`timeout_ms`, ex.: 2000 ms) e as janelas de queda sombreadas;
    abaixo, perda % por hora de calendario.
 3. **Tabelas**: cada queda, resumo diario, distribuicao por status.
-4. **CSV verbose**: `timestamp_iso, timestamp_epoch, rtt_ms, status_code, status`
-   para cada pacote — sempre gerado junto do HTML/PDF.
+
+O **CSV verbose** (`timestamp_iso, timestamp_epoch, target, rtt_ms, status_code,
+status`, uma linha por pacote) e sempre gerado junto do HTML/PDF e cobre todos
+os alvos.
 
 ## Desenvolvimento
 

@@ -2,7 +2,13 @@ import csv
 from datetime import datetime
 
 from packetlizer.config import Config, load_config
-from packetlizer.report import _load_report, export_csv, generate_reports, parse_report_dates
+from packetlizer.report import (
+    _load_report,
+    _load_reports,
+    export_csv,
+    generate_reports,
+    parse_report_dates,
+)
 from packetlizer.storage import Storage
 from packetlizer.config import STATUS_OK, STATUS_TIMEOUT
 
@@ -36,15 +42,16 @@ def test_config_roundtrip(tmp_path):
     assert again.target == "1.1.1.1"
 
 
-def _seed(db, n=200, timeout_ms="2000"):
+def _seed(db, n=200, timeout_ms="2000", target="www.vivo.com.br", base=1_700_000_000,
+         lost_range=(50, 60)):
     with Storage(db) as st:
-        st.set_meta("target", "www.vivo.com.br")
+        st.set_meta("target", target)
         st.set_meta("interval_seconds", "1.0")
         st.set_meta("timeout_ms", timeout_ms)
-        base = 1_700_000_000
         for i in range(n):
-            lost = 50 <= i < 60
-            st.add(None if lost else 20.0 + (i % 4), STATUS_TIMEOUT if lost else STATUS_OK, base + i)
+            lost = lost_range[0] <= i < lost_range[1]
+            st.add(None if lost else 20.0 + (i % 4),
+                   STATUS_TIMEOUT if lost else STATUS_OK, base + i, target=target)
         st.commit()
 
 
@@ -86,6 +93,42 @@ def test_report_uses_configured_timeout_as_chart_sentinel(tmp_path):
     _seed(db2, timeout_ms="1500")
     rep2, _ = _load_report(Config(db_path=str(db2)), None, None)
     assert rep2.timeout_sentinel_ms == 1500.0
+
+
+def test_report_separates_blocks_by_target(tmp_path):
+    db = tmp_path / "multi.db"
+    # alvo antigo, depois alvo novo (janelas de tempo distintas)
+    _seed(db, n=120, target="www.vivo.com.br", base=1_700_000_000, lost_range=(30, 45))
+    _seed(db, n=80, target="1.1.1.1", base=1_700_100_000, lost_range=(10, 14))
+    cfg = Config(db_path=str(db))
+
+    reports = _load_reports(cfg, None, None)
+    assert [r.target for r, _ in reports] == ["www.vivo.com.br", "1.1.1.1"]
+    assert reports[0][0].total == 120
+    assert reports[1][0].total == 80
+    # a perda de cada bloco vem so das suas amostras
+    assert reports[0][0].lost == 15
+    assert reports[1][0].lost == 4
+
+    made = generate_reports(cfg, out_dir=tmp_path / "out", fmt="both")
+    html = next(p for p in made if p.suffix == ".html").read_text(encoding="utf-8")
+    assert "Alvo: www.vivo.com.br" in html
+    assert "Alvo: 1.1.1.1" in html
+    assert html.count("Latencia ao longo do tempo") == 2
+
+    csv_path = next(p for p in made if p.suffix == ".csv")
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+    assert {r["target"] for r in rows} == {"www.vivo.com.br", "1.1.1.1"}
+
+
+def test_report_attributes_old_data_to_its_own_target(tmp_path):
+    """Trocar o alvo nao deve reetiquetar as amostras antigas."""
+    db = tmp_path / "switch.db"
+    _seed(db, n=60, target="alvo-antigo", base=1_700_000_000, lost_range=(0, 0))
+    _seed(db, n=60, target="alvo-novo", base=1_700_050_000, lost_range=(0, 0))
+    reports = _load_reports(Config(db_path=str(db)), None, None)
+    assert {r.target for r, _ in reports} == {"alvo-antigo", "alvo-novo"}
+    assert all(r.total == 60 for r, _ in reports)
 
 
 def test_config_has_no_sentinel_field_and_retention_zero_is_unlimited(tmp_path):

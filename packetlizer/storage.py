@@ -1,11 +1,13 @@
 """Armazenamento compacto das amostras em SQLite.
 
 Esquema (uma linha por sonda):
-    samples(ts INTEGER, rtt_ms REAL NULL, status INTEGER)
+    samples(ts INTEGER, rtt_ms REAL NULL, status INTEGER, target TEXT)
     meta(key TEXT PRIMARY KEY, value TEXT)
 
-~1 amostra/seg ocupa da ordem de poucos MB por dia; a retencao (config)
-apaga o historico antigo e o VACUUM recupera o espaco.
+Cada amostra guarda o alvo (dominio/IP) contra o qual foi feita a sonda, para
+que o relatorio possa separar os dados por alvo mesmo depois de o usuario
+trocar o alvo. ~1 amostra/seg ocupa da ordem de poucos MB por dia; a retencao
+(config) apaga o historico antigo e o VACUUM recupera o espaco.
 """
 from __future__ import annotations
 
@@ -21,7 +23,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS samples (
     ts     INTEGER NOT NULL,
     rtt_ms REAL,
-    status INTEGER NOT NULL
+    status INTEGER NOT NULL,
+    target TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples(ts);
 CREATE TABLE IF NOT EXISTS meta (
@@ -30,12 +33,15 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 """
 
+_ALL = object()  # sentinela: "sem filtro de alvo" (diferente de target=None)
+
 
 @dataclass(frozen=True)
 class Sample:
     ts: int
     rtt_ms: float | None
     status: int
+    target: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -50,18 +56,38 @@ class Storage:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
+        self._conn.commit()
+
+    def _migrate(self) -> None:
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(samples)")}
+        if "target" not in cols:
+            # banco de uma versao anterior: adiciona a coluna e atribui todo o
+            # historico existente ao alvo que estava em uso ate agora (meta.target),
+            # que ainda nao foi sobrescrito pelo alvo novo neste ponto do arranque.
+            self._conn.execute("ALTER TABLE samples ADD COLUMN target TEXT")
+            row = self._conn.execute("SELECT value FROM meta WHERE key='target'").fetchone()
+            if row and row[0]:
+                self._conn.execute(
+                    "UPDATE samples SET target = ? WHERE target IS NULL", (row[0],)
+                )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_target_ts ON samples(target, ts)"
+        )
         self._conn.commit()
 
     # -- escrita -----------------------------------------------------------
-    def add(self, rtt_ms: float | None, status: int, ts: int | None = None) -> None:
+    def add(self, rtt_ms: float | None, status: int, ts: int | None = None,
+            target: str | None = None) -> None:
         self._conn.execute(
-            "INSERT INTO samples(ts, rtt_ms, status) VALUES (?, ?, ?)",
-            (int(ts if ts is not None else time.time()), rtt_ms, int(status)),
+            "INSERT INTO samples(ts, rtt_ms, status, target) VALUES (?, ?, ?, ?)",
+            (int(ts if ts is not None else time.time()), rtt_ms, int(status), target),
         )
 
-    def add_many(self, rows: Iterable[tuple[int, float | None, int]]) -> None:
+    def add_many(self, rows: Iterable[tuple]) -> None:
+        norm = [tuple(r) + (None,) * (4 - len(r)) for r in rows]
         self._conn.executemany(
-            "INSERT INTO samples(ts, rtt_ms, status) VALUES (?, ?, ?)", rows
+            "INSERT INTO samples(ts, rtt_ms, status, target) VALUES (?, ?, ?, ?)", norm
         )
 
     def commit(self) -> None:
@@ -88,20 +114,37 @@ class Storage:
         row = self._conn.execute("SELECT MIN(ts), MAX(ts) FROM samples").fetchone()
         return (row[0], row[1]) if row else (None, None)
 
+    def distinct_targets(self, start: int | None = None, end: int | None = None) -> list[str | None]:
+        """Alvos presentes no intervalo, do mais antigo (por 1a amostra) ao mais recente."""
+        sql, params = self._range_sql("SELECT target, MIN(ts) AS m FROM samples", start, end)
+        sql += " GROUP BY target ORDER BY m ASC"
+        return [r[0] for r in self._conn.execute(sql, params)]
+
     def iter_samples(
-        self, start: int | None = None, end: int | None = None, batch: int = 5000
+        self,
+        start: int | None = None,
+        end: int | None = None,
+        target=_ALL,
+        batch: int = 5000,
     ) -> Iterator[Sample]:
         sql, params = self._range_sql(
-            "SELECT ts, rtt_ms, status FROM samples", start, end
+            "SELECT ts, rtt_ms, status, target FROM samples", start, end
         )
+        if target is not _ALL:
+            joiner = " AND " if " WHERE " in sql else " WHERE "
+            if target is None:
+                sql += joiner + "target IS NULL"
+            else:
+                sql += joiner + "target = ?"
+                params.append(target)
         sql += " ORDER BY ts ASC"
         cur = self._conn.execute(sql, params)
         while True:
             rows = cur.fetchmany(batch)
             if not rows:
                 break
-            for ts, rtt, status in rows:
-                yield Sample(int(ts), rtt, int(status))
+            for ts, rtt, status, tgt in rows:
+                yield Sample(int(ts), rtt, int(status), tgt)
 
     @staticmethod
     def _range_sql(base: str, start: int | None, end: int | None) -> tuple[str, list]:

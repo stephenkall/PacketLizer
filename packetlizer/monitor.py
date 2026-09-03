@@ -136,7 +136,7 @@ class Monitor:
                 log.debug("Erro na sonda: %s", e)
                 res = ProbeResult(None, 1)
 
-            st.add(res.rtt_ms, res.status, ts)
+            st.add(res.rtt_ms, res.status, ts, target=cfg.target)
             pending += 1
             self._update_state(res, ts)
 
