@@ -2,7 +2,7 @@ import csv
 from datetime import datetime
 
 from packetlizer.config import Config, load_config
-from packetlizer.report import export_csv, generate_reports, parse_report_dates
+from packetlizer.report import _load_report, export_csv, generate_reports, parse_report_dates
 from packetlizer.storage import Storage
 from packetlizer.config import STATUS_OK, STATUS_TIMEOUT
 
@@ -36,11 +36,11 @@ def test_config_roundtrip(tmp_path):
     assert again.target == "1.1.1.1"
 
 
-def _seed(db, n=200):
+def _seed(db, n=200, timeout_ms="2000"):
     with Storage(db) as st:
         st.set_meta("target", "www.vivo.com.br")
         st.set_meta("interval_seconds", "1.0")
-        st.set_meta("timeout_sentinel_ms", "9999")
+        st.set_meta("timeout_ms", timeout_ms)
         base = 1_700_000_000
         for i in range(n):
             lost = 50 <= i < 60
@@ -73,3 +73,24 @@ def test_generate_reports_html_pdf_csv(tmp_path):
     html = next(p for p in made if p.suffix == ".html").read_text(encoding="utf-8")
     assert "Perda de pacotes" in html
     assert "data:image/png;base64," in html
+
+
+def test_report_uses_configured_timeout_as_chart_sentinel(tmp_path):
+    db = tmp_path / "d.db"
+    _seed(db, timeout_ms="2000")
+    cfg = Config(db_path=str(db))
+    rep, _ = _load_report(cfg, None, None)
+    assert rep.timeout_sentinel_ms == 2000.0
+
+    db2 = tmp_path / "d2.db"
+    _seed(db2, timeout_ms="1500")
+    rep2, _ = _load_report(Config(db_path=str(db2)), None, None)
+    assert rep2.timeout_sentinel_ms == 1500.0
+
+
+def test_config_has_no_sentinel_field_and_retention_zero_is_unlimited(tmp_path):
+    cfg = load_config(str(tmp_path / "config.json"))
+    assert "timeout_sentinel_ms" not in cfg.to_json()
+    cfg.retention_days = 0
+    cfg.save()
+    assert load_config(str(tmp_path / "config.json")).retention_days == 0

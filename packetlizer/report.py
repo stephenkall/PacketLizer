@@ -97,11 +97,13 @@ def build_chart_png(rep: Report, samples_for_chart: list[tuple[int, float | None
     if lost_x:
         ax1.scatter(lost_x, [sentinel] * len(lost_x), s=10, color="#dc2626",
                     zorder=3, label="Pacote perdido")
-    ax1.axhline(sentinel, color="#dc2626", linestyle=":", linewidth=0.8)
+    ax1.axhline(sentinel, color="#dc2626", linestyle=":", linewidth=0.8,
+                label=f"Timeout ({sentinel:.0f} ms)")
     for o in rep.outages:
         ax1.axvspan(datetime.fromtimestamp(o.start_ts),
                     datetime.fromtimestamp(o.recovered_ts or o.end_ts),
                     color="#dc2626", alpha=0.12)
+    ax1.set_ylim(0, sentinel * 1.08)
     ax1.set_ylabel("Latencia (ms)")
     ax1.set_title(f"Latencia x tempo - alvo {rep.target}  (timeout = {sentinel:.0f} ms)")
     ax1.grid(True, alpha=0.25)
@@ -236,9 +238,10 @@ def render_html(rep: Report, chart_png: bytes) -> str:
   <table><thead><tr><th>Status</th><th>Qtde</th><th>%</th></tr></thead><tbody>{status_rows}</tbody></table>
 
   <p style="margin-top:30px;color:#6b7280;font-size:12px">
-   Gerado por PacketLizer. Pacotes perdidos aparecem no grafico na latencia sentinela
-   de {rep.timeout_sentinel_ms:.0f} ms. Uma "queda" (outage) e uma sequencia de perdas
-   consecutivas acima do limiar configurado (outage_min_consecutive).</p>
+   Gerado por PacketLizer. Pacotes perdidos aparecem no grafico na linha de timeout
+   de {rep.timeout_sentinel_ms:.0f} ms (o timeout por ping configurado). Uma "queda"
+   (outage) e uma sequencia de perdas consecutivas acima do limiar configurado
+   (outage_min_consecutive).</p>
 </main></body></html>"""
 
 
@@ -333,7 +336,11 @@ def _load_report(cfg: Config, start, end):
     st = Storage(cfg.resolved_db_path())
     try:
         interval = float(st.get_meta("interval_seconds", str(cfg.interval_seconds)))
-        sentinel = float(st.get_meta("timeout_sentinel_ms", str(cfg.timeout_sentinel_ms)))
+        # A latencia usada no grafico para um pacote perdido = timeout por ping.
+        # Fallback para a config atual, ou 9999 se o banco for antigo.
+        sentinel = float(st.get_meta("timeout_ms")
+                         or st.get_meta("timeout_sentinel_ms")
+                         or cfg.timeout_ms)
         target = st.get_meta("target", cfg.target)
         samples = list(st.iter_samples(start, end))
     finally:

@@ -101,7 +101,7 @@ class Monitor:
         st.set_meta("target", cfg.target)
         st.set_meta("probe", probe.name)
         st.set_meta("interval_seconds", str(cfg.interval_seconds))
-        st.set_meta("timeout_sentinel_ms", str(cfg.timeout_sentinel_ms))
+        st.set_meta("timeout_ms", str(cfg.timeout_ms))
         log.info("Monitorando %s via %s (%s). Intervalo=%.1fs", cfg.target, probe.name, reason, cfg.interval_seconds)
 
         pending = 0

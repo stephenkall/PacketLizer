@@ -10,7 +10,7 @@ compacto e gera **relatorios sob demanda em HTML + PDF + CSV**.
 O `ping -t alvo > log.txt` funciona, mas o resultado e um paredao de texto.
 O PacketLizer faz a mesma coisa de forma automatica e transforma os dados num
 dashboard com % de perda, frequencia/horario das quedas, duracao media, MTBF,
-grafico de latencia x tempo (timeout marcado na latencia sentinela 9999 ms) e
+grafico de latencia x tempo (timeout marcado na linha do timeout configurado) e
 um CSV verbose com cada pacote.
 
 ## Instalacao
@@ -107,7 +107,6 @@ reports\                 relatorios gerados pelo menu da bandeja
   "target": "www.vivo.com.br",
   "interval_seconds": 1.0,
   "timeout_ms": 2000,
-  "timeout_sentinel_ms": 9999.0,
   "outage_min_consecutive": 3,
   "retention_days": 60,
   "db_path": "",
@@ -115,9 +114,15 @@ reports\                 relatorios gerados pelo menu da bandeja
 }
 ```
 
+As alteracoes feitas na janela sao gravadas neste arquivo (ao clicar em **Salvar
+e aplicar** e tambem ao **Encerrar programa**) e recarregadas no proximo
+arranque — nada se perde entre execucoes.
+
 Uma **queda (outage)** e uma sequencia de `outage_min_consecutive` ou mais
-perdas seguidas. `retention_days` apaga o historico mais antigo no arranque e
-compacta o banco (VACUUM).
+perdas seguidas. `timeout_ms` e o timeout de cada ping **e** o valor de latencia
+usado no grafico para marcar um pacote perdido. `retention_days` apaga o
+historico mais antigo no arranque e compacta o banco (VACUUM); **`0` = retencao
+ilimitada** (nada e apagado).
 
 ## O relatorio
 
@@ -125,8 +130,9 @@ compacta o banco (VACUUM).
    total fora do ar, duracao media/mediana/maxima da queda, intervalo medio
    entre quedas, MTBF, horario e dia da semana mais criticos, latencia p50/p95
    e jitter.
-2. **Grafico** latencia x tempo, com pacotes perdidos plotados em 9999 ms e as
-   janelas de queda sombreadas; abaixo, perda % por hora de calendario.
+2. **Grafico** latencia x tempo, com pacotes perdidos plotados na linha de
+   timeout (`timeout_ms`, ex.: 2000 ms) e as janelas de queda sombreadas;
+   abaixo, perda % por hora de calendario.
 3. **Tabelas**: cada queda, resumo diario, distribuicao por status.
 4. **CSV verbose**: `timestamp_iso, timestamp_epoch, rtt_ms, status_code, status`
    para cada pacote — sempre gerado junto do HTML/PDF.
