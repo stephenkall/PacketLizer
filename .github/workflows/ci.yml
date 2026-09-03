@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, master]
 
+permissions:
+  contents: write   # o job "release" cria releases e anexa o .exe
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -18,27 +21,63 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Instalar dependencias
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest
-      - name: Rodar testes
+          pip install -r requirements.txt pytest
+      - name: Run tests
         run: pytest -q
 
-  build-windows-exe:
+  # A cada push na branch principal que passe nos testes: compila o .exe no
+  # Windows e publica uma GitHub Release com o binario anexado para download.
+  release:
     needs: test
-    if: github.event_name == 'push'
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r requirements.txt pyinstaller
-      - run: python build_exe.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: PacketLizer-exe
-          path: dist/PacketLizer.exe
-          if-no-files-found: error
+
+      - name: Install build dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build executable
+        run: python build_exe.py
+
+      - name: Smoke-test the executable
+        shell: bash
+        run: ./dist/PacketLizer.exe --config
+
+      - name: Compute version tag
+        id: ver
+        shell: bash
+        run: |
+          BASE=$(python -c "import packetlizer; print(packetlizer.__version__)")
+          TAG="v${BASE}.${GITHUB_RUN_NUMBER}"
+          echo "tag=$TAG"                          >> "$GITHUB_OUTPUT"
+          echo "asset=PacketLizer-${TAG}.exe"      >> "$GITHUB_OUTPUT"
+
+      - name: Package binary
+        shell: bash
+        run: |
+          mkdir -p release
+          cp dist/PacketLizer.exe "release/${{ steps.ver.outputs.asset }}"
+          ls -la release
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            "release/${{ steps.ver.outputs.asset }}" \
+            --title "PacketLizer ${{ steps.ver.outputs.tag }}" \
+            --notes "Automated build from commit ${GITHUB_SHA::7}. Tests passed on Python 3.11 and 3.12. Download PacketLizer-*.exe below." \
+            --latest
