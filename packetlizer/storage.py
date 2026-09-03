@@ -165,6 +165,54 @@ class Storage:
         self._conn.commit()
         return cur.rowcount
 
+    @staticmethod
+    def _filter_sql(start: int | None, end: int | None, targets) -> tuple[str, list]:
+        """Build a WHERE clause from a ts range and/or a list of targets.
+
+        `targets` may be None/empty (no target filter) or a list of str/None.
+        """
+        clauses: list[str] = []
+        params: list = []
+        if start is not None:
+            clauses.append("ts >= ?")
+            params.append(int(start))
+        if end is not None:
+            clauses.append("ts <= ?")
+            params.append(int(end))
+        if targets:
+            real = [x for x in targets if x is not None]
+            subs = []
+            if real:
+                subs.append("target IN (%s)" % ",".join("?" * len(real)))
+                params.extend(real)
+            if any(x is None for x in targets):
+                subs.append("target IS NULL")
+            if subs:
+                clauses.append("(" + " OR ".join(subs) + ")")
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return where, params
+
+    def count_samples(self, start: int | None = None, end: int | None = None, targets=None) -> int:
+        where, params = self._filter_sql(start, end, targets)
+        return int(self._conn.execute("SELECT COUNT(*) FROM samples" + where, params).fetchone()[0])
+
+    def delete_samples(self, start: int | None = None, end: int | None = None, targets=None) -> int:
+        """Delete samples matching a ts range and/or targets. Requires at least one filter."""
+        where, params = self._filter_sql(start, end, targets)
+        if not where:
+            raise ValueError("delete_samples needs a date range and/or targets; "
+                             "use clear_all_samples() to wipe everything")
+        cur = self._conn.execute("DELETE FROM samples" + where, params)
+        self._conn.commit()
+        self.vacuum()
+        return cur.rowcount
+
+    def clear_all_samples(self) -> int:
+        cur = self._conn.execute("DELETE FROM samples")
+        self._conn.commit()
+        self.vacuum()
+        return cur.rowcount
+
     def vacuum(self) -> None:
         self._conn.execute("VACUUM")
         self._conn.commit()

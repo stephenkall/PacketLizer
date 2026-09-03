@@ -49,7 +49,7 @@ if __name__ == "__main__" and not getattr(sys, "frozen", False):
 import argparse  # noqa: E402
 
 from packetlizer.config import Config, load_config  # noqa: E402
-from packetlizer.i18n import set_language  # noqa: E402
+from packetlizer.i18n import available_languages, set_language  # noqa: E402
 
 
 def _cmd_report(cfg: Config, args) -> int:
@@ -128,7 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--target", help="Domain or IP to probe (e.g. www.vivo.com.br).")
     o.add_argument("--interval", type=float, help="Seconds between pings.")
     o.add_argument("--timeout", type=int, help="Per-ping timeout in ms.")
-    o.add_argument("--language", choices=["auto", "en", "pt_BR"], help="UI/report language.")
+    o.add_argument("--language", choices=available_languages(), help="UI/report language.")
     o.add_argument("--duration", type=int, default=None,
                    help="With --monitor: stop automatically after N seconds (run deadline).")
     return p

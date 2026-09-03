@@ -32,6 +32,7 @@ from .i18n import (
     t,
 )
 from .monitor import LiveState, Monitor
+from .storage import Storage
 
 log = logging.getLogger("packetlizer.app")
 
@@ -119,8 +120,8 @@ class TrayApp:
 
         self._root = root = tk.Tk()
         root.title("PacketLizer")
-        root.geometry("480x680")
-        root.minsize(450, 600)
+        root.geometry("500x830")
+        root.minsize(480, 760)
         root.protocol("WM_DELETE_WINDOW", self._hide_window)
         # semi-hidden: no taskbar button, starts withdrawn to the tray
         try:
@@ -129,18 +130,29 @@ class TrayApp:
             pass
         root.withdraw()
 
-        pad = {"padx": 12, "pady": 6}
+        pad = {"padx": 12, "pady": 4}
         header = ttk.Frame(root)
-        header.pack(fill="x", **pad)
+        header.pack(side="top", fill="x", **pad)
         self._dot = tk.Canvas(header, width=18, height=18, highlightthickness=0)
         self._dot.pack(side="left")
         self._dot_id = self._dot.create_oval(2, 2, 16, 16, fill="#94a3b8", outline="")
         self._state_lbl = ttk.Label(header, text="", font=("Segoe UI", 13, "bold"))
         self._state_lbl.pack(side="left", padx=8)
 
+        # Bottom button bar is packed BEFORE the scrolling content so it always
+        # keeps its strip at the bottom of the window and never gets pushed off.
+        btns = ttk.Frame(root)
+        btns.pack(side="bottom", fill="x", **pad)
+        self._pause_btn = ttk.Button(btns, text="", command=self._on_toggle_pause)
+        self._pause_btn.pack(side="left")
+        self._open_btn = ttk.Button(btns, text="", command=lambda: _open_path(app_home()))
+        self._open_btn.pack(side="left", padx=6)
+        self._quit_btn = ttk.Button(btns, text="", command=self._on_quit)
+        self._quit_btn.pack(side="right")
+
         # ---- editable configuration ---------------------------------
         conf = ttk.LabelFrame(root, text="")
-        conf.pack(fill="x", **pad)
+        conf.pack(side="top", fill="x", **pad)
         conf.columnconfigure(1, weight=1)
         self._lf_config = conf
         self._cfg_vars = {
@@ -183,13 +195,17 @@ class TrayApp:
 
         self._apply_btn = ttk.Button(conf, text="", command=self._on_apply_config)
         self._apply_btn.grid(row=lang_row + 2, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 3))
-        self._cfg_status = ttk.Label(conf, text="", foreground="#6b7280",
-                                     wraplength=430, justify="left")
-        self._cfg_status.grid(row=lang_row + 3, column=0, columnspan=2, sticky="w", padx=8)
+        # fixed-height holder so a 2-3 line feedback message never resizes the layout
+        cfg_status_holder = ttk.Frame(conf, height=54)
+        cfg_status_holder.grid(row=lang_row + 3, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 4))
+        cfg_status_holder.grid_propagate(False)
+        self._cfg_status = ttk.Label(cfg_status_holder, text="", foreground="#6b7280",
+                                     wraplength=452, justify="left")
+        self._cfg_status.pack(anchor="w", fill="x")
 
         # ---- live status ------------------------------------------
         info = ttk.LabelFrame(root, text="")
-        info.pack(fill="x", **pad)
+        info.pack(side="top", fill="x", **pad)
         self._lf_status = info
         self._info_vars = {k: tk.StringVar(value="-") for k in
                            ("target", "method", "last", "loss", "outages", "uptime")}
@@ -211,33 +227,36 @@ class TrayApp:
 
         # ---- report -----------------------------------------------
         rep = ttk.LabelFrame(root, text="")
-        rep.pack(fill="x", **pad)
+        rep.pack(side="top", fill="x", **pad)
+        rep.columnconfigure(1, weight=1)
         self._lf_report = rep
         self._since_lbl = ttk.Label(rep, text="")
-        self._since_lbl.grid(row=0, column=0, sticky="w", padx=8, pady=3)
+        self._since_lbl.grid(row=0, column=0, sticky="w", padx=8, pady=2)
         self._since_var = tk.StringVar()
-        ttk.Entry(rep, textvariable=self._since_var, width=22).grid(row=0, column=1, padx=8, pady=3)
+        ttk.Entry(rep, textvariable=self._since_var, width=22).grid(row=0, column=1, sticky="w", padx=8, pady=2)
         self._until_lbl = ttk.Label(rep, text="")
-        self._until_lbl.grid(row=1, column=0, sticky="w", padx=8, pady=3)
+        self._until_lbl.grid(row=1, column=0, sticky="w", padx=8, pady=2)
         self._until_var = tk.StringVar()
-        ttk.Entry(rep, textvariable=self._until_var, width=22).grid(row=1, column=1, padx=8, pady=3)
+        ttk.Entry(rep, textvariable=self._until_var, width=22).grid(row=1, column=1, sticky="w", padx=8, pady=2)
         self._hint_lbl = ttk.Label(rep, text="", foreground="#6b7280")
         self._hint_lbl.grid(row=2, column=0, columnspan=2, sticky="w", padx=8)
         self._report_btn = ttk.Button(rep, text="", command=self._on_report)
         self._report_btn.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 4))
-        self._report_status = ttk.Label(rep, text="", foreground="#6b7280",
-                                        wraplength=440, justify="left")
-        self._report_status.grid(row=4, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        rep_status_holder = ttk.Frame(rep, height=46)
+        rep_status_holder.grid(row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 4))
+        rep_status_holder.grid_propagate(False)
+        self._report_status = ttk.Label(rep_status_holder, text="", foreground="#6b7280",
+                                        wraplength=452, justify="left")
+        self._report_status.pack(anchor="w", fill="x")
 
-        # ---- bottom buttons -------------------------------------
-        btns = ttk.Frame(root)
-        btns.pack(fill="x", **pad)
-        self._pause_btn = ttk.Button(btns, text="", command=self._on_toggle_pause)
-        self._pause_btn.pack(side="left")
-        self._open_btn = ttk.Button(btns, text="", command=lambda: _open_path(app_home()))
-        self._open_btn.pack(side="left", padx=6)
-        self._quit_btn = ttk.Button(btns, text="", command=self._on_quit)
-        self._quit_btn.pack(side="right")
+        # ---- data & logs maintenance -----------------------------
+        maint = ttk.LabelFrame(root, text="")
+        maint.pack(side="top", fill="x", **pad)
+        self._lf_maint = maint
+        self._clear_logs_btn = ttk.Button(maint, text="", command=self._on_clear_logs)
+        self._clear_logs_btn.pack(side="left", padx=8, pady=6)
+        self._delete_logs_btn = ttk.Button(maint, text="", command=self._open_delete_logs_dialog)
+        self._delete_logs_btn.pack(side="left", padx=8, pady=6)
 
         self._retext()
 
@@ -276,6 +295,9 @@ class TrayApp:
         self._until_lbl.config(text=t("win.field.end_date") + ":")
         self._hint_lbl.config(text=t("win.hint.date_format"))
         self._report_btn.config(text=t("win.btn.generate_report"))
+        self._lf_maint.config(text=t("win.section.maintenance"))
+        self._clear_logs_btn.config(text=t("win.btn.clear_logs"))
+        self._delete_logs_btn.config(text=t("win.btn.delete_logs"))
         self._open_btn.config(text=t("win.btn.open_data_folder"))
         self._quit_btn.config(text=t("win.btn.quit"))
         idx = self._lang_combo.current()
@@ -477,6 +499,110 @@ class TrayApp:
         self.monitor = Monitor(self.cfg, self.state)
         self._mon_thread = threading.Thread(target=self._run_monitor, name="monitor", daemon=True)
         self._mon_thread.start()
+
+    # -- data & logs maintenance -----------------------------------
+    def _db_targets(self) -> list:
+        """Distinct targets currently stored (may include None)."""
+        try:
+            with Storage(self.cfg.resolved_db_path()) as st:
+                return st.distinct_targets()
+        except Exception:  # pragma: no cover
+            return []
+
+    def _run_db_op(self, fn):
+        """Stop the monitor, run ``fn(storage)`` with exclusive DB access, then
+        start a fresh monitor (which also resets the session counters)."""
+        self.monitor.request_stop()
+        if self._mon_thread:
+            self._mon_thread.join(timeout=8)
+        try:
+            with Storage(self.cfg.resolved_db_path()) as st:
+                return fn(st)
+        finally:
+            self.state = LiveState()
+            self.monitor = Monitor(self.cfg, self.state)
+            self._mon_thread = threading.Thread(target=self._run_monitor, name="monitor", daemon=True)
+            self._mon_thread.start()
+
+    def _on_clear_logs(self, *_):
+        from tkinter import messagebox
+
+        if not messagebox.askyesno(t("dlg.clear_logs_title"), t("dlg.clear_logs_confirm"),
+                                   icon="warning", default="cancel"):
+            return
+        removed = self._run_db_op(lambda st: st.clear_all_samples())
+        self._notify(t("notify.logs_cleared", n=removed))
+        self._cfg_status.config(text=t("notify.logs_cleared", n=removed), foreground="#15803d")
+
+    def _open_delete_logs_dialog(self, *_):
+        import tkinter as tk
+        from tkinter import messagebox, ttk
+
+        from .report import parse_report_dates
+
+        targets = self._db_targets()
+        win = tk.Toplevel(self._root)
+        win.title(t("dlg.delete_logs_title"))
+        win.transient(self._root)
+        win.resizable(False, False)
+        try:
+            win.attributes("-toolwindow", True)
+        except tk.TclError:
+            pass
+        pad = {"padx": 12, "pady": 5}
+
+        ttk.Label(win, text=t("win.field.start_date") + ":").grid(row=0, column=0, sticky="w", **pad)
+        since_var = tk.StringVar()
+        ttk.Entry(win, textvariable=since_var, width=24).grid(row=0, column=1, sticky="w", **pad)
+        ttk.Label(win, text=t("win.field.end_date") + ":").grid(row=1, column=0, sticky="w", **pad)
+        until_var = tk.StringVar()
+        ttk.Entry(win, textvariable=until_var, width=24).grid(row=1, column=1, sticky="w", **pad)
+        ttk.Label(win, text=t("win.hint.date_format"), foreground="#6b7280").grid(
+            row=2, column=0, columnspan=2, sticky="w", padx=12)
+
+        ttk.Label(win, text=t("dlg.delete_logs_targets") + ":").grid(
+            row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 0))
+        lb = tk.Listbox(win, selectmode="extended", height=min(8, max(3, len(targets))),
+                        exportselection=False, width=40)
+        for tg in targets:
+            lb.insert("end", tg if tg is not None else t("target.unknown"))
+        lb.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12)
+        ttk.Label(win, text=t("dlg.delete_logs_hint"), foreground="#6b7280").grid(
+            row=5, column=0, columnspan=2, sticky="w", padx=12, pady=(2, 6))
+
+        def do_delete():
+            try:
+                start, end = parse_report_dates(since_var.get(), until_var.get())
+            except ValueError:
+                messagebox.showerror(t("dlg.invalid_title"), t("dlg.invalid_numbers"), parent=win)
+                return
+            sel = [targets[i] for i in lb.curselection()]
+            if not sel and start is None and end is None:
+                messagebox.showerror(t("dlg.delete_logs_title"), t("dlg.delete_logs_none"), parent=win)
+                return
+            with Storage(self.cfg.resolved_db_path()) as st:
+                n = st.count_samples(start, end, sel or None)
+            if n == 0:
+                messagebox.showinfo(t("dlg.delete_logs_title"), t("dlg.delete_logs_nomatch"), parent=win)
+                return
+            if not messagebox.askyesno(t("dlg.delete_logs_title"),
+                                       t("dlg.delete_logs_confirm", n=n),
+                                       icon="warning", default="cancel", parent=win):
+                return
+            removed = self._run_db_op(lambda st: st.delete_samples(start, end, sel or None))
+            win.destroy()
+            self._notify(t("notify.logs_cleared", n=removed))
+            self._cfg_status.config(text=t("notify.logs_cleared", n=removed), foreground="#15803d")
+
+        bar = ttk.Frame(win)
+        bar.grid(row=6, column=0, columnspan=2, sticky="ew", padx=12, pady=10)
+        ttk.Button(bar, text=t("win.btn.cancel"), command=win.destroy).pack(side="right")
+        ttk.Button(bar, text=t("win.btn.delete"), command=do_delete).pack(side="right", padx=6)
+
+        win.grid_columnconfigure(1, weight=1)
+        win.update_idletasks()
+        win.grab_set()
+        win.focus_force()
 
     def _on_report(self, *_, all_data: bool = False):
         if self._report_busy:

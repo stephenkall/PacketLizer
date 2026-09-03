@@ -2,9 +2,12 @@
 
 Each language is a flat ``dict[str, str]``. Lookups fall back to English and
 then to the key itself, so a missing translation never crashes the UI. Strings
-may carry ``{named}`` placeholders consumed by :func:`t` via ``str.format``.
+may carry ``{named}`` placeholders consumed by :func:`t` via ``str.format`` --
+placeholders and their format specs (``{pct:.2f}`` etc.) must be identical
+across every language.
 
 Default language is ``"auto"`` -> detected from the operating system.
+Add a language by dropping another flat dict into ``LANGUAGES``.
 """
 from __future__ import annotations
 
@@ -15,18 +18,24 @@ import sys
 
 log = logging.getLogger("packetlizer.i18n")
 
+# Native names shown in the language picker regardless of the active language.
+_NATIVE_NAMES = {
+    "en": "English",
+    "pt_BR": "Português (Brasil)",
+    "es": "Español",
+    "zh": "中文（简体）",
+}
+
 _EN: dict[str, str] = {
-    # live state
     "state.starting": "Starting...",
     "state.running": "Running",
     "state.unstable": "Unstable (recent losses)",
     "state.outage": "OUTAGE in progress",
     "state.paused": "Paused (standby)",
-    # window sections
     "win.section.config": "Configuration",
     "win.section.status": "Status",
     "win.section.report": "Generate report (HTML + PDF + CSV)",
-    # config fields
+    "win.section.maintenance": "Data & logs",
     "win.field.target": "Target (domain or IP)",
     "win.field.interval": "Interval between pings (s)",
     "win.field.timeout": "Timeout per ping (ms)",
@@ -36,15 +45,17 @@ _EN: dict[str, str] = {
     "win.field.start_date": "Start date (optional)",
     "win.field.end_date": "End date (optional)",
     "win.hint.date_format": "Format: YYYY-MM-DD (e.g. 2026-09-01). Empty = everything.",
-    # buttons / checkbox
     "win.btn.save_apply": "Save & apply",
     "win.btn.generate_report": "Generate report",
     "win.btn.pause": "Pause",
     "win.btn.resume": "Resume",
     "win.btn.open_data_folder": "Open data folder",
     "win.btn.quit": "Quit",
+    "win.btn.clear_logs": "Clear all logs",
+    "win.btn.delete_logs": "Delete specific logs...",
+    "win.btn.delete": "Delete",
+    "win.btn.cancel": "Cancel",
     "win.chk.autostart": "Start automatically with Windows",
-    # status values
     "win.status.target": "Target",
     "win.status.method": "Method",
     "win.status.last_sample": "Last sample",
@@ -55,13 +66,11 @@ _EN: dict[str, str] = {
     "win.value.method_fmt": "{name}  ({reason})",
     "win.value.last_fmt": "{time}  -  {status} ({rtt})",
     "win.value.loss_fmt": "{pct:.2f}%   ({lost} of {total})",
-    # report panel feedback
     "win.report.generating": "Generating report...",
     "win.report.done": "OK - {n} files generated in:\n{path}",
     "win.report.error": "Error: {err}",
     "win.cfg.saved_restarted": "Saved to {file}. Monitor restarted with the new target; this session's stats reset.",
     "win.cfg.saved_applied": "Saved to {file}. Settings applied without restarting the monitor.",
-    # dialogs
     "dlg.invalid_title": "Invalid configuration",
     "dlg.invalid_target_empty": "Enter a domain or IP in the 'Target' field.",
     "dlg.invalid_target_space": "The target cannot contain spaces.",
@@ -73,14 +82,22 @@ _EN: dict[str, str] = {
     "dlg.save_error_title": "Save error",
     "dlg.quit_title": "Quit PacketLizer",
     "dlg.quit_confirm": "Stop monitoring and close the program?",
-    # tray menu
+    "dlg.clear_logs_title": "Clear all logs",
+    "dlg.clear_logs_confirm": "Permanently delete ALL recorded samples? This cannot be undone.",
+    "dlg.delete_logs_title": "Delete specific logs",
+    "dlg.delete_logs_targets": "Targets (none selected = every target)",
+    "dlg.delete_logs_hint": "Pick target(s) and/or a date range. At least one is required.",
+    "dlg.delete_logs_none": "Select at least one target or a date range.",
+    "dlg.delete_logs_confirm": "Delete {n} samples matching the filter? This cannot be undone.",
+    "dlg.delete_logs_nomatch": "No samples match the filter.",
+    "notify.logs_cleared": "Removed {n} samples; session stats reset.",
+    "target.unknown": "(unknown)",
     "menu.open_window": "Open window",
     "menu.pause_resume": "Pause / Resume",
     "menu.generate_report_all": "Generate report (all)",
     "menu.quit": "Quit",
     "menu.state_fmt": "State: {state}",
     "menu.loss_fmt": "{target} | loss {pct:.2f}%",
-    # notifications
     "notify.running_tray": "PacketLizer is running in the tray. Click the icon to open the window.",
     "notify.hidden": "PacketLizer keeps running in the tray. Click the icon to reopen.",
     "notify.paused": "Monitoring paused (standby).",
@@ -89,15 +106,10 @@ _EN: dict[str, str] = {
     "notify.autostart_on": "PacketLizer will start automatically with Windows.",
     "notify.autostart_off": "Automatic start with Windows is now disabled.",
     "notify.autostart_fail": "Could not change the automatic-start setting: {err}",
-    # probe method descriptions
     "probe.raw_privileged": "raw ICMP (privileged process)",
     "probe.ping_no_admin": "OS ping (no admin privileges)",
     "probe.ping_raw_unavailable": "OS ping (raw ICMP unavailable)",
-    # language names
     "lang.auto": "System default",
-    "lang.en": "English",
-    "lang.pt_BR": "Portugues (Brasil)",
-    # report document
     "rpt.doc_title": "PacketLizer - Stability report",
     "rpt.header": "PacketLizer — Stability report",
     "rpt.window_fmt": "Window: {start} → {end}",
@@ -121,7 +133,6 @@ _EN: dict[str, str] = {
         "configured per-ping timeout). An outage is a run of consecutive losses at or "
         "above the configured threshold (outage_min_consecutive)."
     ),
-    # table columns
     "col.num": "#",
     "col.start": "Start",
     "col.duration": "Duration",
@@ -136,7 +147,6 @@ _EN: dict[str, str] = {
     "col.status": "Status",
     "col.count": "Count",
     "col.pct": "%",
-    # KPI cards: title + sub-line
     "kpi.loss": "Packet loss",
     "kpi.loss_sub_fmt": "{lost} of {total} packets",
     "kpi.availability": "Availability",
@@ -156,13 +166,11 @@ _EN: dict[str, str] = {
     "kpi.peak_weekday_sub_fmt": "{n} outages",
     "kpi.latency_pct": "Latency p50 / p95",
     "kpi.latency_pct_sub_fmt": "avg {avg:.0f} ms - jitter {jitter:.0f} ms",
-    # chart
     "chart.title_fmt": "Latency vs time - target {target}  (timeout = {ms:.0f} ms)",
     "chart.latency_ms": "Latency (ms)",
     "chart.lost_packet": "Lost packet",
     "chart.timeout_fmt": "Timeout ({ms:.0f} ms)",
     "chart.loss_per_hour": "Loss %/h",
-    # weekdays (0 = Monday)
     "weekday.0": "Monday",
     "weekday.1": "Tuesday",
     "weekday.2": "Wednesday",
@@ -181,6 +189,7 @@ _PT_BR: dict[str, str] = {
     "win.section.config": "Configuracao",
     "win.section.status": "Status",
     "win.section.report": "Gerar relatorio (HTML + PDF + CSV)",
+    "win.section.maintenance": "Dados e logs",
     "win.field.target": "Alvo (dominio ou IP)",
     "win.field.interval": "Intervalo entre pings (s)",
     "win.field.timeout": "Timeout por ping (ms)",
@@ -196,6 +205,10 @@ _PT_BR: dict[str, str] = {
     "win.btn.resume": "Retomar",
     "win.btn.open_data_folder": "Abrir pasta de dados",
     "win.btn.quit": "Encerrar programa",
+    "win.btn.clear_logs": "Limpar todos os logs",
+    "win.btn.delete_logs": "Excluir logs especificos...",
+    "win.btn.delete": "Excluir",
+    "win.btn.cancel": "Cancelar",
     "win.chk.autostart": "Iniciar automaticamente com o Windows",
     "win.status.target": "Alvo",
     "win.status.method": "Metodo",
@@ -223,6 +236,16 @@ _PT_BR: dict[str, str] = {
     "dlg.save_error_title": "Erro ao salvar",
     "dlg.quit_title": "Encerrar PacketLizer",
     "dlg.quit_confirm": "Encerrar o monitoramento e fechar o programa?",
+    "dlg.clear_logs_title": "Limpar todos os logs",
+    "dlg.clear_logs_confirm": "Apagar permanentemente TODAS as amostras registradas? Nao da para desfazer.",
+    "dlg.delete_logs_title": "Excluir logs especificos",
+    "dlg.delete_logs_targets": "Alvos (nenhum selecionado = todos os alvos)",
+    "dlg.delete_logs_hint": "Escolha alvo(s) e/ou um intervalo de datas. Pelo menos um e obrigatorio.",
+    "dlg.delete_logs_none": "Selecione pelo menos um alvo ou um intervalo de datas.",
+    "dlg.delete_logs_confirm": "Excluir {n} amostras que batem com o filtro? Nao da para desfazer.",
+    "dlg.delete_logs_nomatch": "Nenhuma amostra bate com o filtro.",
+    "notify.logs_cleared": "Removidas {n} amostras; estatisticas da sessao reiniciadas.",
+    "target.unknown": "(desconhecido)",
     "menu.open_window": "Abrir janela",
     "menu.pause_resume": "Pausar / Retomar",
     "menu.generate_report_all": "Gerar relatorio (tudo)",
@@ -241,8 +264,6 @@ _PT_BR: dict[str, str] = {
     "probe.ping_no_admin": "ping do SO (sem privilegio de admin)",
     "probe.ping_raw_unavailable": "ping do SO (ICMP raw indisponivel)",
     "lang.auto": "Padrao do sistema",
-    "lang.en": "English",
-    "lang.pt_BR": "Portugues (Brasil)",
     "rpt.doc_title": "PacketLizer - Relatorio de estabilidade",
     "rpt.header": "PacketLizer — Relatorio de estabilidade",
     "rpt.window_fmt": "Janela: {start} → {end}",
@@ -313,7 +334,320 @@ _PT_BR: dict[str, str] = {
     "weekday.6": "Domingo",
 }
 
-LANGUAGES: dict[str, dict[str, str]] = {"en": _EN, "pt_BR": _PT_BR}
+_ES: dict[str, str] = {
+    "state.starting": "Iniciando...",
+    "state.running": "En ejecucion",
+    "state.unstable": "Inestable (perdidas recientes)",
+    "state.outage": "CORTE en curso",
+    "state.paused": "En pausa (standby)",
+    "win.section.config": "Configuracion",
+    "win.section.status": "Estado",
+    "win.section.report": "Generar informe (HTML + PDF + CSV)",
+    "win.section.maintenance": "Datos y registros",
+    "win.field.target": "Objetivo (dominio o IP)",
+    "win.field.interval": "Intervalo entre pings (s)",
+    "win.field.timeout": "Tiempo de espera por ping (ms)",
+    "win.field.outage_min": "Perdidas seguidas para contar un corte",
+    "win.field.retention": "Retencion del historial (dias, 0 = ilimitada)",
+    "win.field.language": "Idioma",
+    "win.field.start_date": "Fecha inicial (opcional)",
+    "win.field.end_date": "Fecha final (opcional)",
+    "win.hint.date_format": "Formato: AAAA-MM-DD (p. ej. 2026-09-01). Vacio = todo.",
+    "win.btn.save_apply": "Guardar y aplicar",
+    "win.btn.generate_report": "Generar informe",
+    "win.btn.pause": "Pausar",
+    "win.btn.resume": "Reanudar",
+    "win.btn.open_data_folder": "Abrir carpeta de datos",
+    "win.btn.quit": "Salir",
+    "win.btn.clear_logs": "Borrar todos los registros",
+    "win.btn.delete_logs": "Eliminar registros especificos...",
+    "win.btn.delete": "Eliminar",
+    "win.btn.cancel": "Cancelar",
+    "win.chk.autostart": "Iniciar automaticamente con Windows",
+    "win.status.target": "Objetivo",
+    "win.status.method": "Metodo",
+    "win.status.last_sample": "Ultima muestra",
+    "win.status.loss": "Perdida de paquetes",
+    "win.status.outages": "Cortes detectados",
+    "win.status.monitoring_for": "Monitorizando desde hace",
+    "win.value.no_response": "sin respuesta",
+    "win.value.method_fmt": "{name}  ({reason})",
+    "win.value.last_fmt": "{time}  -  {status} ({rtt})",
+    "win.value.loss_fmt": "{pct:.2f}%   ({lost} de {total})",
+    "win.report.generating": "Generando informe...",
+    "win.report.done": "OK - {n} archivos generados en:\n{path}",
+    "win.report.error": "Error: {err}",
+    "win.cfg.saved_restarted": "Guardado en {file}. Monitor reiniciado con el nuevo objetivo; las estadisticas de esta sesion se reinician.",
+    "win.cfg.saved_applied": "Guardado en {file}. Ajustes aplicados sin reiniciar el monitor.",
+    "dlg.invalid_title": "Configuracion invalida",
+    "dlg.invalid_target_empty": "Escribe un dominio o IP en el campo 'Objetivo'.",
+    "dlg.invalid_target_space": "El objetivo no puede contener espacios.",
+    "dlg.invalid_numbers": "Intervalo, tiempo de espera, perdidas y retencion deben ser numeros.",
+    "dlg.invalid_interval_min": "El intervalo minimo entre pings es 0,2 s.",
+    "dlg.invalid_timeout_min": "El tiempo de espera minimo es 200 ms.",
+    "dlg.invalid_outage_min": "'Perdidas seguidas para contar un corte' debe ser >= 1.",
+    "dlg.invalid_retention_neg": "Retencion invalida. Usa 0 para retencion ilimitada.",
+    "dlg.save_error_title": "Error al guardar",
+    "dlg.quit_title": "Salir de PacketLizer",
+    "dlg.quit_confirm": "Detener la monitorizacion y cerrar el programa?",
+    "dlg.clear_logs_title": "Borrar todos los registros",
+    "dlg.clear_logs_confirm": "Eliminar permanentemente TODAS las muestras registradas? No se puede deshacer.",
+    "dlg.delete_logs_title": "Eliminar registros especificos",
+    "dlg.delete_logs_targets": "Objetivos (ninguno seleccionado = todos)",
+    "dlg.delete_logs_hint": "Elige objetivo(s) y/o un rango de fechas. Se requiere al menos uno.",
+    "dlg.delete_logs_none": "Selecciona al menos un objetivo o un rango de fechas.",
+    "dlg.delete_logs_confirm": "Eliminar {n} muestras que coinciden con el filtro? No se puede deshacer.",
+    "dlg.delete_logs_nomatch": "Ninguna muestra coincide con el filtro.",
+    "notify.logs_cleared": "Se eliminaron {n} muestras; estadisticas de la sesion reiniciadas.",
+    "target.unknown": "(desconocido)",
+    "menu.open_window": "Abrir ventana",
+    "menu.pause_resume": "Pausar / Reanudar",
+    "menu.generate_report_all": "Generar informe (todo)",
+    "menu.quit": "Salir",
+    "menu.state_fmt": "Estado: {state}",
+    "menu.loss_fmt": "{target} | perdida {pct:.2f}%",
+    "notify.running_tray": "PacketLizer se esta ejecutando en la bandeja. Haz clic en el icono para abrir la ventana.",
+    "notify.hidden": "PacketLizer sigue en la bandeja. Haz clic en el icono para reabrir.",
+    "notify.paused": "Monitorizacion pausada (standby).",
+    "notify.resumed": "Monitorizacion reanudada.",
+    "notify.report_done": "Informe generado: {names}",
+    "notify.autostart_on": "PacketLizer se iniciara automaticamente con Windows.",
+    "notify.autostart_off": "Inicio automatico con Windows desactivado.",
+    "notify.autostart_fail": "No se pudo cambiar el inicio automatico: {err}",
+    "probe.raw_privileged": "ICMP sin procesar (proceso con privilegios)",
+    "probe.ping_no_admin": "ping del SO (sin privilegios de admin)",
+    "probe.ping_raw_unavailable": "ping del SO (ICMP sin procesar no disponible)",
+    "lang.auto": "Predeterminado del sistema",
+    "rpt.doc_title": "PacketLizer - Informe de estabilidad",
+    "rpt.header": "PacketLizer — Informe de estabilidad",
+    "rpt.window_fmt": "Ventana: {start} → {end}",
+    "rpt.total_fmt": "{n} muestras en total",
+    "rpt.generated_fmt": "generado a las {ts}",
+    "rpt.multi_intro_fmt": "Este informe abarca {n} objetivos distintos. Cada bloque de abajo usa solo las muestras recogidas contra ese objetivo:",
+    "rpt.multi_note": "Cada bloque de abajo usa solo las muestras recogidas contra ese objetivo.",
+    "rpt.block_target_fmt": "Objetivo: {target}",
+    "rpt.block_window_fmt": "Ventana de este objetivo: {start} → {end}  |  {n} muestras recogidas contra este objetivo  |  intervalo {interval:.0f}s",
+    "rpt.h_latency": "Latencia a lo largo del tiempo",
+    "rpt.h_outages_fmt": "Cortes detectados ({n})",
+    "rpt.h_daily": "Resumen diario",
+    "rpt.h_status": "Desglose por estado",
+    "rpt.no_outages": "Ningun corte registrado.",
+    "rpt.no_data": "Sin datos.",
+    "rpt.no_samples": "No hay muestras en el rango solicitado - deja correr el monitor antes de generar un informe.",
+    "rpt.unknown_target": "(objetivo desconocido)",
+    "rpt.footer_fmt": (
+        "Generado por PacketLizer. Cada bloque usa solo las muestras recogidas contra "
+        "ese objetivo. Los paquetes perdidos se dibujan en la linea de tiempo de espera "
+        "a {ms:.0f} ms (el tiempo de espera por ping configurado). Un corte es una serie "
+        "de perdidas consecutivas igual o por encima del umbral configurado "
+        "(outage_min_consecutive)."
+    ),
+    "col.num": "#",
+    "col.start": "Inicio",
+    "col.duration": "Duracion",
+    "col.lost_packets": "Paquetes perdidos",
+    "col.kinds": "Tipos",
+    "col.date": "Fecha",
+    "col.samples": "Muestras",
+    "col.lost": "Perdidos",
+    "col.loss_pct": "Perdida %",
+    "col.outages": "Cortes",
+    "col.avg_latency": "Latencia media",
+    "col.status": "Estado",
+    "col.count": "Cantidad",
+    "col.pct": "%",
+    "kpi.loss": "Perdida de paquetes",
+    "kpi.loss_sub_fmt": "{lost} de {total} paquetes",
+    "kpi.availability": "Disponibilidad",
+    "kpi.availability_sub": "ventana analizada",
+    "kpi.outages": "Cortes",
+    "kpi.outages_sub_fmt": "{per_day:.1f} por dia",
+    "kpi.downtime": "Tiempo total caido",
+    "kpi.downtime_sub": "suma de los cortes",
+    "kpi.avg_outage": "Duracion media del corte",
+    "kpi.avg_outage_sub_fmt": "mediana {median} / max {max}",
+    "kpi.interval_between": "Intervalo medio entre cortes",
+    "kpi.interval_between_sub_fmt": "MTBF {mtbf}",
+    "kpi.peak_hour": "Hora mas critica",
+    "kpi.peak_hour_sub_fmt": "{n} cortes en esa hora",
+    "kpi.no_outages": "sin cortes",
+    "kpi.peak_weekday": "Dia de la semana mas critico",
+    "kpi.peak_weekday_sub_fmt": "{n} cortes",
+    "kpi.latency_pct": "Latencia p50 / p95",
+    "kpi.latency_pct_sub_fmt": "media {avg:.0f} ms - jitter {jitter:.0f} ms",
+    "chart.title_fmt": "Latencia vs tiempo - objetivo {target}  (tiempo de espera = {ms:.0f} ms)",
+    "chart.latency_ms": "Latencia (ms)",
+    "chart.lost_packet": "Paquete perdido",
+    "chart.timeout_fmt": "Tiempo de espera ({ms:.0f} ms)",
+    "chart.loss_per_hour": "Perdida %/h",
+    "weekday.0": "Lunes",
+    "weekday.1": "Martes",
+    "weekday.2": "Miercoles",
+    "weekday.3": "Jueves",
+    "weekday.4": "Viernes",
+    "weekday.5": "Sabado",
+    "weekday.6": "Domingo",
+}
+
+_ZH: dict[str, str] = {
+    "state.starting": "正在启动……",
+    "state.running": "运行中",
+    "state.unstable": "不稳定（近期有丢包）",
+    "state.outage": "正在发生中断",
+    "state.paused": "已暂停（待机）",
+    "win.section.config": "配置",
+    "win.section.status": "状态",
+    "win.section.report": "生成报告（HTML + PDF + CSV）",
+    "win.section.maintenance": "数据与日志",
+    "win.field.target": "目标（域名或 IP）",
+    "win.field.interval": "两次 ping 的间隔（秒）",
+    "win.field.timeout": "每次 ping 的超时（毫秒）",
+    "win.field.outage_min": "计为一次中断的连续丢包数",
+    "win.field.retention": "历史保留天数（0 = 不限）",
+    "win.field.language": "语言",
+    "win.field.start_date": "开始日期（可选）",
+    "win.field.end_date": "结束日期（可选）",
+    "win.hint.date_format": "格式：YYYY-MM-DD（例如 2026-09-01）。留空 = 全部。",
+    "win.btn.save_apply": "保存并应用",
+    "win.btn.generate_report": "生成报告",
+    "win.btn.pause": "暂停",
+    "win.btn.resume": "继续",
+    "win.btn.open_data_folder": "打开数据文件夹",
+    "win.btn.quit": "退出",
+    "win.btn.clear_logs": "清除所有日志",
+    "win.btn.delete_logs": "删除指定日志……",
+    "win.btn.delete": "删除",
+    "win.btn.cancel": "取消",
+    "win.chk.autostart": "随 Windows 自动启动",
+    "win.status.target": "目标",
+    "win.status.method": "方式",
+    "win.status.last_sample": "最近一次采样",
+    "win.status.loss": "丢包率",
+    "win.status.outages": "检测到的中断",
+    "win.status.monitoring_for": "已监控",
+    "win.value.no_response": "无响应",
+    "win.value.method_fmt": "{name}  ({reason})",
+    "win.value.last_fmt": "{time}  -  {status} ({rtt})",
+    "win.value.loss_fmt": "{pct:.2f}%   （{total} 中 {lost}）",
+    "win.report.generating": "正在生成报告……",
+    "win.report.done": "完成 - 已在此处生成 {n} 个文件：\n{path}",
+    "win.report.error": "错误：{err}",
+    "win.cfg.saved_restarted": "已保存到 {file}。监控已使用新目标重启；本次会话统计已重置。",
+    "win.cfg.saved_applied": "已保存到 {file}。设置已应用，无需重启监控。",
+    "dlg.invalid_title": "配置无效",
+    "dlg.invalid_target_empty": "请在“目标”字段中填写域名或 IP。",
+    "dlg.invalid_target_space": "目标不能包含空格。",
+    "dlg.invalid_numbers": "间隔、超时、丢包数和保留天数必须是数字。",
+    "dlg.invalid_interval_min": "两次 ping 的最小间隔为 0.2 秒。",
+    "dlg.invalid_timeout_min": "最小超时为 200 毫秒。",
+    "dlg.invalid_outage_min": "“计为一次中断的连续丢包数”必须 >= 1。",
+    "dlg.invalid_retention_neg": "保留天数无效。使用 0 表示不限保留。",
+    "dlg.save_error_title": "保存错误",
+    "dlg.quit_title": "退出 PacketLizer",
+    "dlg.quit_confirm": "停止监控并关闭程序？",
+    "dlg.clear_logs_title": "清除所有日志",
+    "dlg.clear_logs_confirm": "永久删除所有已记录的采样？此操作无法撤销。",
+    "dlg.delete_logs_title": "删除指定日志",
+    "dlg.delete_logs_targets": "目标（不选 = 所有目标）",
+    "dlg.delete_logs_hint": "选择目标和/或日期范围，至少填一项。",
+    "dlg.delete_logs_none": "请至少选择一个目标或一个日期范围。",
+    "dlg.delete_logs_confirm": "删除符合筛选条件的 {n} 条采样？此操作无法撤销。",
+    "dlg.delete_logs_nomatch": "没有采样符合该筛选条件。",
+    "notify.logs_cleared": "已删除 {n} 条采样；会话统计已重置。",
+    "target.unknown": "（未知）",
+    "menu.open_window": "打开窗口",
+    "menu.pause_resume": "暂停 / 继续",
+    "menu.generate_report_all": "生成报告（全部）",
+    "menu.quit": "退出",
+    "menu.state_fmt": "状态：{state}",
+    "menu.loss_fmt": "{target} | 丢包 {pct:.2f}%",
+    "notify.running_tray": "PacketLizer 正在托盘中运行。点击图标打开窗口。",
+    "notify.hidden": "PacketLizer 仍在托盘中运行。点击图标重新打开。",
+    "notify.paused": "监控已暂停（待机）。",
+    "notify.resumed": "监控已继续。",
+    "notify.report_done": "报告已生成：{names}",
+    "notify.autostart_on": "PacketLizer 将随 Windows 自动启动。",
+    "notify.autostart_off": "已关闭随 Windows 自动启动。",
+    "notify.autostart_fail": "无法更改自动启动设置：{err}",
+    "probe.raw_privileged": "原始 ICMP（有权限的进程）",
+    "probe.ping_no_admin": "系统 ping（无管理员权限）",
+    "probe.ping_raw_unavailable": "系统 ping（原始 ICMP 不可用）",
+    "lang.auto": "跟随系统",
+    "rpt.doc_title": "PacketLizer - 稳定性报告",
+    "rpt.header": "PacketLizer — 稳定性报告",
+    "rpt.window_fmt": "时间范围：{start} → {end}",
+    "rpt.total_fmt": "共 {n} 条采样",
+    "rpt.generated_fmt": "生成于 {ts}",
+    "rpt.multi_intro_fmt": "本报告涵盖 {n} 个不同的目标。下面每个区块只使用针对该目标采集的采样：",
+    "rpt.multi_note": "下面每个区块只使用针对该目标采集的采样。",
+    "rpt.block_target_fmt": "目标：{target}",
+    "rpt.block_window_fmt": "该目标的时间范围：{start} → {end}  |  针对该目标采集 {n} 条采样  |  间隔 {interval:.0f} 秒",
+    "rpt.h_latency": "延迟随时间变化",
+    "rpt.h_outages_fmt": "检测到的中断（{n}）",
+    "rpt.h_daily": "每日汇总",
+    "rpt.h_status": "状态分布",
+    "rpt.no_outages": "未记录到中断。",
+    "rpt.no_data": "无数据。",
+    "rpt.no_samples": "请求的范围内没有采样 - 请先让监控运行一段时间再生成报告。",
+    "rpt.unknown_target": "（未知目标）",
+    "rpt.footer_fmt": (
+        "由 PacketLizer 生成。每个区块只使用针对该目标采集的采样。丢失的数据包画在 "
+        "{ms:.0f} 毫秒的超时线上（即配置的每次 ping 超时）。一次中断是指连续丢包数达到"
+        "或超过配置阈值（outage_min_consecutive）的一段。"
+    ),
+    "col.num": "#",
+    "col.start": "开始",
+    "col.duration": "持续",
+    "col.lost_packets": "丢失的数据包",
+    "col.kinds": "类型",
+    "col.date": "日期",
+    "col.samples": "采样数",
+    "col.lost": "丢失",
+    "col.loss_pct": "丢包 %",
+    "col.outages": "中断",
+    "col.avg_latency": "平均延迟",
+    "col.status": "状态",
+    "col.count": "数量",
+    "col.pct": "%",
+    "kpi.loss": "丢包率",
+    "kpi.loss_sub_fmt": "{total} 个数据包中丢失 {lost} 个",
+    "kpi.availability": "可用率",
+    "kpi.availability_sub": "分析的时间范围",
+    "kpi.outages": "中断",
+    "kpi.outages_sub_fmt": "每天 {per_day:.1f} 次",
+    "kpi.downtime": "总中断时长",
+    "kpi.downtime_sub": "各次中断之和",
+    "kpi.avg_outage": "平均中断时长",
+    "kpi.avg_outage_sub_fmt": "中位数 {median} / 最大 {max}",
+    "kpi.interval_between": "两次中断的平均间隔",
+    "kpi.interval_between_sub_fmt": "MTBF {mtbf}",
+    "kpi.peak_hour": "最严重的时段",
+    "kpi.peak_hour_sub_fmt": "该时段发生 {n} 次中断",
+    "kpi.no_outages": "无中断",
+    "kpi.peak_weekday": "最严重的星期",
+    "kpi.peak_weekday_sub_fmt": "{n} 次中断",
+    "kpi.latency_pct": "延迟 p50 / p95",
+    "kpi.latency_pct_sub_fmt": "平均 {avg:.0f} 毫秒 - 抖动 {jitter:.0f} 毫秒",
+    "chart.title_fmt": "延迟随时间变化 - 目标 {target}  （超时 = {ms:.0f} 毫秒）",
+    "chart.latency_ms": "延迟（毫秒）",
+    "chart.lost_packet": "丢失的数据包",
+    "chart.timeout_fmt": "超时（{ms:.0f} 毫秒）",
+    "chart.loss_per_hour": "每小时丢包 %",
+    "weekday.0": "星期一",
+    "weekday.1": "星期二",
+    "weekday.2": "星期三",
+    "weekday.3": "星期四",
+    "weekday.4": "星期五",
+    "weekday.5": "星期六",
+    "weekday.6": "星期日",
+}
+
+LANGUAGES: dict[str, dict[str, str]] = {
+    "en": _EN,
+    "pt_BR": _PT_BR,
+    "es": _ES,
+    "zh": _ZH,
+}
 
 _current = "en"
 
@@ -324,7 +658,10 @@ def available_languages() -> list[str]:
 
 
 def language_display_name(code: str) -> str:
-    return t(f"lang.{code}") if code != "auto" else t("lang.auto")
+    """Native name for the picker (``"System default"`` is translated for ``auto``)."""
+    if code == "auto":
+        return t("lang.auto")
+    return _NATIVE_NAMES.get(code, code)
 
 
 def detect_system_language() -> str:
@@ -342,7 +679,7 @@ def detect_system_language() -> str:
         import warnings
 
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # getdefaultlocale is deprecated but still the simplest
+            warnings.simplefilter("ignore")  # getdefaultlocale is deprecated but simplest
             candidates.append(locale.getdefaultlocale()[0] or "")
     except Exception:
         pass
@@ -353,9 +690,9 @@ def detect_system_language() -> str:
         code = (raw or "").replace("-", "_")
         if code in LANGUAGES:
             return code
-        root = code.split("_")[0]
+        root = code.split("_")[0].lower()
         for lang in LANGUAGES:
-            if lang.split("_")[0] == root:
+            if lang.split("_")[0].lower() == root:
                 return lang
     return "en"
 

@@ -83,7 +83,13 @@ shows:
 * **Quit** (with confirmation);
 * **Generate report** with optional **start date** and **end date**: no start
   date means since the beginning of the data, no end date means up to the most
-  recent sample. The HTML opens automatically when done.
+  recent sample. The HTML opens automatically when done;
+* **Data & logs**: **Clear all logs** wipes every recorded sample (with a
+  confirmation), and **Delete specific logs...** opens a dialog to remove
+  samples by a date range and/or a selection of targets — target(s) only
+  deletes all dates for them, dates only deletes all targets in the range, both
+  narrows to the intersection. The monitor is stopped for the deletion and
+  restarts fresh afterwards (session counters reset).
 
 Closing the window with `X` just hides it back to the tray; monitoring
 continues. With no GUI environment (`tkinter` missing), the program falls back
@@ -109,11 +115,13 @@ the windowed build never flashes a console window.
 ## Localization
 
 The whole UI and the reports are localized through `packetlizer/i18n.py`.
-Built-in languages: **English** and **Portuguese (Brazil)**; the default is
-`auto` (detected from the operating system). Pick one from the **Language**
-selector in the window, or set `"language"` in `config.json` (`"auto"`, `"en"`,
-`"pt_BR"`), or pass `--language`. Adding a language is just another flat
-`dict[str, str]` in `i18n.py`.
+Built-in languages: **English**, **Portuguese (Brazil)**, **Spanish** and
+**Mandarin (Simplified Chinese)**; the default is `auto` (detected from the
+operating system). Pick one from the **Language** selector in the window, set
+`"language"` in `config.json` (`"auto"`, `"en"`, `"pt_BR"`, `"es"`, `"zh"`), or
+pass `--language`. Adding a language is just another flat `dict[str, str]` in
+`i18n.py` (missing keys fall back to English) — there is no per-language build
+step.
 
 ## Where the data lives
 
