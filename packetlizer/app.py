@@ -120,40 +120,43 @@ class TrayApp:
 
         self._root = root = tk.Tk()
         root.title("PacketLizer")
-        root.geometry("500x830")
-        root.minsize(480, 760)
+        root.geometry("600x580")
+        root.minsize(560, 520)
+        root.resizable(True, True)
         root.protocol("WM_DELETE_WINDOW", self._hide_window)
-        # semi-hidden: no taskbar button, starts withdrawn to the tray
-        try:
-            root.attributes("-toolwindow", True)
-        except tk.TclError:
-            pass
-        root.withdraw()
+        # Show in the taskbar while visible; drop off it when minimized
+        # (minimize-to-tray -- the tray icon brings it back).
+        root.bind("<Unmap>", self._on_unmap)
+        root.withdraw()  # start hidden in the tray
 
-        pad = {"padx": 12, "pady": 4}
+        pad = {"padx": 10, "pady": 3}
         header = ttk.Frame(root)
-        header.pack(side="top", fill="x", **pad)
-        self._dot = tk.Canvas(header, width=18, height=18, highlightthickness=0)
+        header.pack(side="top", fill="x", padx=10, pady=(6, 2))
+        self._dot = tk.Canvas(header, width=16, height=16, highlightthickness=0)
         self._dot.pack(side="left")
-        self._dot_id = self._dot.create_oval(2, 2, 16, 16, fill="#94a3b8", outline="")
-        self._state_lbl = ttk.Label(header, text="", font=("Segoe UI", 13, "bold"))
+        self._dot_id = self._dot.create_oval(1, 1, 15, 15, fill="#94a3b8", outline="")
+        self._state_lbl = ttk.Label(header, text="", font=("Segoe UI", 12, "bold"))
         self._state_lbl.pack(side="left", padx=8)
 
-        # Bottom button bar is packed BEFORE the scrolling content so it always
-        # keeps its strip at the bottom of the window and never gets pushed off.
+        # The bottom button bar is packed FIRST with side=bottom so it always
+        # keeps its strip and is never pushed off-screen by the content above.
         btns = ttk.Frame(root)
-        btns.pack(side="bottom", fill="x", **pad)
-        self._pause_btn = ttk.Button(btns, text="", command=self._on_toggle_pause)
+        btns.pack(side="bottom", fill="x", padx=10, pady=6)
+        self._pause_btn = ttk.Button(btns, text="", width=10, command=self._on_toggle_pause)
         self._pause_btn.pack(side="left")
         self._open_btn = ttk.Button(btns, text="", command=lambda: _open_path(app_home()))
         self._open_btn.pack(side="left", padx=6)
-        self._quit_btn = ttk.Button(btns, text="", command=self._on_quit)
+        self._quit_btn = ttk.Button(btns, text="", width=10, command=self._on_quit)
         self._quit_btn.pack(side="right")
 
-        # ---- editable configuration ---------------------------------
+        self._field_labels: dict[str, object] = {}
+        self._status_labels: dict[str, object] = {}
+
+        # ---- editable configuration (two field pairs per row) -------
         conf = ttk.LabelFrame(root, text="")
         conf.pack(side="top", fill="x", **pad)
         conf.columnconfigure(1, weight=1)
+        conf.columnconfigure(3, weight=1)
         self._lf_config = conf
         self._cfg_vars = {
             "target": tk.StringVar(value=self.cfg.target),
@@ -162,101 +165,100 @@ class TrayApp:
             "omin": tk.StringVar(value=str(self.cfg.outage_min_consecutive)),
             "ret": tk.StringVar(value=str(self.cfg.retention_days)),
         }
-        conf_rows = [
-            ("win.field.target", "target"),
-            ("win.field.interval", "interval"),
-            ("win.field.timeout", "timeout"),
-            ("win.field.outage_min", "omin"),
-            ("win.field.retention", "ret"),
-        ]
-        self._field_labels: dict[str, object] = {}
-        for i, (key, var) in enumerate(conf_rows):
-            lbl = ttk.Label(conf, text="")
-            lbl.grid(row=i, column=0, sticky="w", padx=8, pady=3)
-            self._field_labels[key] = lbl
-            ttk.Entry(conf, textvariable=self._cfg_vars[var]).grid(
-                row=i, column=1, sticky="ew", padx=8, pady=3)
 
-        lang_row = len(conf_rows)
+        def cfield(key, var, r, col, span=1, width=9):
+            lbl = ttk.Label(conf, text="")
+            lbl.grid(row=r, column=col, sticky="w", padx=(8, 4), pady=2)
+            self._field_labels[key] = lbl
+            ttk.Entry(conf, textvariable=self._cfg_vars[var], width=width).grid(
+                row=r, column=col + 1, columnspan=span, sticky="ew", padx=(0, 8), pady=2)
+
+        cfield("win.field.target", "target", 0, 0, span=3, width=20)
+        cfield("win.field.interval", "interval", 1, 0)
+        cfield("win.field.timeout", "timeout", 1, 2)
+        cfield("win.field.outage_min", "omin", 2, 0)
+        cfield("win.field.retention", "ret", 2, 2)
+
         self._lang_label = ttk.Label(conf, text="")
-        self._lang_label.grid(row=lang_row, column=0, sticky="w", padx=8, pady=3)
+        self._lang_label.grid(row=3, column=0, sticky="w", padx=(8, 4), pady=2)
         self._lang_codes = available_languages()
-        self._lang_combo = ttk.Combobox(conf, state="readonly",
+        self._lang_combo = ttk.Combobox(conf, state="readonly", width=18,
                                         values=[language_display_name(c) for c in self._lang_codes])
         cur_lang = self.cfg.language if self.cfg.language in self._lang_codes else "auto"
         self._lang_combo.current(self._lang_codes.index(cur_lang))
-        self._lang_combo.grid(row=lang_row, column=1, sticky="ew", padx=8, pady=3)
+        self._lang_combo.grid(row=3, column=1, sticky="w", padx=(0, 8), pady=2)
         self._lang_combo.bind("<<ComboboxSelected>>", self._on_language_change)
 
         self._autostart_var = tk.BooleanVar(value=self._autostart_enabled())
         self._autostart_chk = ttk.Checkbutton(conf, text="", variable=self._autostart_var,
                                               command=self._on_toggle_autostart)
-        self._autostart_chk.grid(row=lang_row + 1, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 2))
+        self._autostart_chk.grid(row=3, column=2, columnspan=2, sticky="w", padx=(0, 8), pady=2)
 
         self._apply_btn = ttk.Button(conf, text="", command=self._on_apply_config)
-        self._apply_btn.grid(row=lang_row + 2, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 3))
-        # fixed-height holder so a 2-3 line feedback message never resizes the layout
-        cfg_status_holder = ttk.Frame(conf, height=54)
-        cfg_status_holder.grid(row=lang_row + 3, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 4))
+        self._apply_btn.grid(row=4, column=0, columnspan=4, sticky="ew", padx=8, pady=(6, 2))
+        cfg_status_holder = ttk.Frame(conf, height=36)
+        cfg_status_holder.grid(row=5, column=0, columnspan=4, sticky="ew", padx=8, pady=(0, 4))
         cfg_status_holder.grid_propagate(False)
         self._cfg_status = ttk.Label(cfg_status_holder, text="", foreground="#6b7280",
-                                     wraplength=452, justify="left")
+                                     wraplength=540, justify="left")
         self._cfg_status.pack(anchor="w", fill="x")
 
-        # ---- live status ------------------------------------------
+        # ---- live status (two columns) ---------------------------
         info = ttk.LabelFrame(root, text="")
         info.pack(side="top", fill="x", **pad)
+        info.columnconfigure(1, weight=1)
+        info.columnconfigure(3, weight=1)
         self._lf_status = info
         self._info_vars = {k: tk.StringVar(value="-") for k in
                            ("target", "method", "last", "loss", "outages", "uptime")}
-        status_rows = [
-            ("win.status.target", "target"),
-            ("win.status.method", "method"),
-            ("win.status.last_sample", "last"),
-            ("win.status.loss", "loss"),
-            ("win.status.outages", "outages"),
-            ("win.status.monitoring_for", "uptime"),
-        ]
-        self._status_labels: dict[str, object] = {}
-        for i, (key, var) in enumerate(status_rows):
+
+        def sfield(key, var, r, col, span=1):
             lbl = ttk.Label(info, text="")
-            lbl.grid(row=i, column=0, sticky="w", padx=8, pady=2)
+            lbl.grid(row=r, column=col, sticky="w", padx=(8, 4), pady=1)
             self._status_labels[key] = lbl
             ttk.Label(info, textvariable=self._info_vars[var]).grid(
-                row=i, column=1, sticky="w", padx=8, pady=2)
+                row=r, column=col + 1, columnspan=span, sticky="w", padx=(0, 8), pady=1)
 
-        # ---- report -----------------------------------------------
+        sfield("win.status.method", "method", 0, 0, span=3)
+        sfield("win.status.target", "target", 1, 0)
+        sfield("win.status.last_sample", "last", 1, 2)
+        sfield("win.status.loss", "loss", 2, 0)
+        sfield("win.status.outages", "outages", 2, 2)
+        sfield("win.status.monitoring_for", "uptime", 3, 0)
+
+        # ---- report ---------------------------------------------
         rep = ttk.LabelFrame(root, text="")
         rep.pack(side="top", fill="x", **pad)
         rep.columnconfigure(1, weight=1)
+        rep.columnconfigure(3, weight=1)
         self._lf_report = rep
         self._since_lbl = ttk.Label(rep, text="")
-        self._since_lbl.grid(row=0, column=0, sticky="w", padx=8, pady=2)
+        self._since_lbl.grid(row=0, column=0, sticky="w", padx=(8, 4), pady=2)
         self._since_var = tk.StringVar()
-        ttk.Entry(rep, textvariable=self._since_var, width=22).grid(row=0, column=1, sticky="w", padx=8, pady=2)
+        ttk.Entry(rep, textvariable=self._since_var, width=12).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=2)
         self._until_lbl = ttk.Label(rep, text="")
-        self._until_lbl.grid(row=1, column=0, sticky="w", padx=8, pady=2)
+        self._until_lbl.grid(row=0, column=2, sticky="w", padx=(8, 4), pady=2)
         self._until_var = tk.StringVar()
-        ttk.Entry(rep, textvariable=self._until_var, width=22).grid(row=1, column=1, sticky="w", padx=8, pady=2)
+        ttk.Entry(rep, textvariable=self._until_var, width=12).grid(row=0, column=3, sticky="ew", padx=(0, 8), pady=2)
         self._hint_lbl = ttk.Label(rep, text="", foreground="#6b7280")
-        self._hint_lbl.grid(row=2, column=0, columnspan=2, sticky="w", padx=8)
+        self._hint_lbl.grid(row=1, column=0, columnspan=4, sticky="w", padx=8)
         self._report_btn = ttk.Button(rep, text="", command=self._on_report)
-        self._report_btn.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 4))
-        rep_status_holder = ttk.Frame(rep, height=46)
-        rep_status_holder.grid(row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 4))
+        self._report_btn.grid(row=2, column=0, columnspan=4, sticky="ew", padx=8, pady=(4, 2))
+        rep_status_holder = ttk.Frame(rep, height=36)
+        rep_status_holder.grid(row=3, column=0, columnspan=4, sticky="ew", padx=8, pady=(0, 4))
         rep_status_holder.grid_propagate(False)
         self._report_status = ttk.Label(rep_status_holder, text="", foreground="#6b7280",
-                                        wraplength=452, justify="left")
+                                        wraplength=540, justify="left")
         self._report_status.pack(anchor="w", fill="x")
 
-        # ---- data & logs maintenance -----------------------------
+        # ---- data & logs maintenance ---------------------------
         maint = ttk.LabelFrame(root, text="")
         maint.pack(side="top", fill="x", **pad)
         self._lf_maint = maint
         self._clear_logs_btn = ttk.Button(maint, text="", command=self._on_clear_logs)
-        self._clear_logs_btn.pack(side="left", padx=8, pady=6)
+        self._clear_logs_btn.pack(side="left", padx=8, pady=4)
         self._delete_logs_btn = ttk.Button(maint, text="", command=self._open_delete_logs_dialog)
-        self._delete_logs_btn.pack(side="left", padx=8, pady=6)
+        self._delete_logs_btn.pack(side="left", padx=8, pady=4)
 
         self._retext()
 
@@ -322,7 +324,8 @@ class TrayApp:
 
     def _do_show(self):
         r = self._root
-        r.deiconify()
+        r.deiconify()  # un-withdraw / un-minimize -> visible + taskbar button
+        r.state("normal")
         r.lift()
         r.attributes("-topmost", True)
         r.after(300, lambda: r.attributes("-topmost", False))
@@ -330,8 +333,14 @@ class TrayApp:
 
     def _hide_window(self):
         if self._root:
-            self._root.withdraw()
+            self._root.withdraw()  # removes the taskbar button too
             self._notify(t("notify.hidden"))
+
+    def _on_unmap(self, event):
+        # Fires on minimize and on withdraw. On minimize, withdraw instead so the
+        # taskbar button disappears; the tray icon is the way back.
+        if event.widget is self._root and self._root.state() == "iconic":
+            self._root.withdraw()
 
     def _tick(self):
         if self._shutting_down or not self._root:
@@ -528,7 +537,7 @@ class TrayApp:
         from tkinter import messagebox
 
         if not messagebox.askyesno(t("dlg.clear_logs_title"), t("dlg.clear_logs_confirm"),
-                                   icon="warning", default="cancel"):
+                                   icon="warning", default="no"):
             return
         removed = self._run_db_op(lambda st: st.clear_all_samples())
         self._notify(t("notify.logs_cleared", n=removed))
@@ -543,12 +552,8 @@ class TrayApp:
         targets = self._db_targets()
         win = tk.Toplevel(self._root)
         win.title(t("dlg.delete_logs_title"))
-        win.transient(self._root)
+        win.transient(self._root)  # keeps it off the taskbar, on top of the main window
         win.resizable(False, False)
-        try:
-            win.attributes("-toolwindow", True)
-        except tk.TclError:
-            pass
         pad = {"padx": 12, "pady": 5}
 
         ttk.Label(win, text=t("win.field.start_date") + ":").grid(row=0, column=0, sticky="w", **pad)
@@ -587,7 +592,7 @@ class TrayApp:
                 return
             if not messagebox.askyesno(t("dlg.delete_logs_title"),
                                        t("dlg.delete_logs_confirm", n=n),
-                                       icon="warning", default="cancel", parent=win):
+                                       icon="warning", default="no", parent=win):
                 return
             removed = self._run_db_op(lambda st: st.delete_samples(start, end, sel or None))
             win.destroy()

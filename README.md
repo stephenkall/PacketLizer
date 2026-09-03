@@ -63,10 +63,11 @@ stays around ~45 MB.
 
 ### Main window
 
-The icon sits in the tray and the window **does not show up in the taskbar**
-(it's a *tool window*). On first run the window opens so you can set the target;
-after that it **starts hidden** — click the tray icon to open it. The window
-shows:
+The icon sits in the tray. While the window is open it **appears in the
+taskbar** like a normal app; **minimizing it hides it to the tray** (no taskbar
+button), and closing it with `X` does the same — the tray icon brings it back.
+On first run the window opens so you can set the target; after that it starts
+hidden. The window shows:
 
 * the **current state** (Running / Unstable / OUTAGE in progress / Paused), with
   a colored indicator;
