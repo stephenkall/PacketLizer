@@ -68,3 +68,62 @@ def test_purge(tmp_path):
         removed = st.purge_older_than(now - 5 * 86400)
         assert removed == 1
         assert st.count() == 1
+
+
+def _seed_two_targets(st, base=1_700_000_000):
+    for i in range(30):
+        st.add(10.0, STATUS_OK, base + i, target="a")
+    for i in range(20):
+        st.add(10.0, STATUS_OK, base + 1000 + i, target="b")
+    st.commit()
+
+
+def test_delete_samples_by_target_only(tmp_path):
+    with Storage(tmp_path / "d.db") as st:
+        _seed_two_targets(st)
+        removed = st.delete_samples(targets=["a"])
+        assert removed == 30
+        assert st.distinct_targets() == ["b"]
+        assert st.count() == 20
+
+
+def test_delete_samples_by_date_only(tmp_path):
+    base = 1_700_000_000
+    with Storage(tmp_path / "d.db") as st:
+        _seed_two_targets(st, base)
+        # window covers only target "a" rows
+        removed = st.delete_samples(start=base, end=base + 29)
+        assert removed == 30
+        assert st.count() == 20
+        assert st.distinct_targets() == ["b"]
+
+
+def test_delete_samples_by_target_and_date(tmp_path):
+    base = 1_700_000_000
+    with Storage(tmp_path / "d.db") as st:
+        _seed_two_targets(st, base)
+        # target "b" but a window that only overlaps its first 5 rows
+        removed = st.delete_samples(start=base + 1000, end=base + 1004, targets=["b"])
+        assert removed == 5
+        assert st.count() == 45
+        assert st.count_samples(targets=["b"]) == 15
+        assert st.count_samples(targets=["a"]) == 30
+
+
+def test_delete_samples_needs_a_filter(tmp_path):
+    import pytest
+
+    with Storage(tmp_path / "d.db") as st:
+        _seed_two_targets(st)
+        with pytest.raises(ValueError):
+            st.delete_samples()
+
+
+def test_clear_all_samples(tmp_path):
+    with Storage(tmp_path / "d.db") as st:
+        _seed_two_targets(st)
+        st.set_meta("target", "a")
+        removed = st.clear_all_samples()
+        assert removed == 50
+        assert st.count() == 0
+        assert st.get_meta("target") == "a"  # meta is preserved
