@@ -1,11 +1,11 @@
-"""Inicio automatico com o Windows, sem exigir privilegio de administrador.
+"""Start automatically with Windows, without requiring administrator privileges.
 
-Dois metodos:
-  * registro  -> HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run  (padrao)
-  * pasta     -> %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\PacketLizer.cmd
+Two methods:
+  * registry -> HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run  (default)
+  * folder   -> %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\PacketLizer.cmd
 
-O modo "script" roda `pythonw.exe main.py` (sem console, so o icone na bandeja).
-O modo "exe" aponta para dist\\PacketLizer.exe quando existir / o processo estiver "frozen".
+The "script" mode runs `pythonw.exe main.py` (no console, tray icon only).
+The "exe" mode points at dist\\PacketLizer.exe when it exists / the process is frozen.
 """
 from __future__ import annotations
 
@@ -43,8 +43,9 @@ def _startup_dir() -> Path:
 
 
 def set_autostart(enable: bool, mode: str = "auto", use_startup_folder: bool = False) -> tuple[bool, str]:
+    """Enable/disable start-with-Windows. Returns ``(ok, english_message)`` for the CLI."""
     if not sys.platform.startswith("win"):
-        return False, "Autostart automatico so e suportado no Windows (use o cron/systemd no Linux)."
+        return False, "Automatic start is only supported on Windows (use cron/systemd on Linux)."
 
     cmd = resolve_command(mode)
 
@@ -54,22 +55,22 @@ def set_autostart(enable: bool, mode: str = "auto", use_startup_folder: bool = F
         cmdfile = d / f"{APP_NAME}.cmd"
         if enable:
             cmdfile.write_text(f'@echo off\r\nstart "" {cmd}\r\n', encoding="utf-8")
-            return True, f"Autostart ativado via pasta Inicializar: {cmdfile}"
+            return True, f"Autostart enabled via the Startup folder: {cmdfile}"
         if cmdfile.exists():
             cmdfile.unlink()
-        return True, "Autostart (pasta Inicializar) removido."
+        return True, "Autostart (Startup folder) removed."
 
     import winreg  # type: ignore
 
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_ALL_ACCESS) as key:
         if enable:
             winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, cmd)
-            return True, f"Autostart ativado no registro (HKCU\\...\\Run):\n  {cmd}"
+            return True, f"Autostart enabled in the registry (HKCU\\...\\Run):\n  {cmd}"
         try:
             winreg.DeleteValue(key, APP_NAME)
-            return True, "Autostart removido do registro."
+            return True, "Autostart removed from the registry."
         except FileNotFoundError:
-            return True, "Autostart ja estava desativado."
+            return True, "Autostart was already disabled."
 
 
 def is_autostart_enabled() -> bool:

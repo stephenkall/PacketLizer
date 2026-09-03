@@ -51,6 +51,7 @@ stays around ~45 MB.
 | `python main.py --monitor` | Monitor only, foreground, with logs (Ctrl+C stops and saves) |
 | `python main.py --monitor --duration 3600` | Headless monitor with a run deadline (stops after 1 h) |
 | `python main.py --monitor --target 1.1.1.1 --interval 2` | Override target/interval for this run only |
+| `python main.py --language pt_BR ...` | Override the UI/report language for this run (`auto`, `en`, `pt_BR`) |
 | `python main.py --report --format both` | Generate an HTML + PDF report (+ CSV) in the current folder |
 | `python main.py --report --days 7` | Report for the last 7 days only |
 | `python main.py --report --since 2026-09-01 --until 2026-09-03` | Report for a date range |
@@ -71,9 +72,11 @@ shows:
   a colored indicator;
 * an **editable configuration** panel: a text field for the **target (domain or
   IP)**, ping interval, per-ping timeout, number of consecutive losses that
-  counts as an outage, and history retention in days. **Save & apply** writes
+  counts as an outage, history retention in days, a **language** selector, and a
+  **"Start automatically with Windows"** checkbox. **Save & apply** writes
   `config.json`; if the target/interval/timeout changed, the monitor restarts
-  automatically;
+  automatically. The language switch takes effect immediately; the autostart
+  checkbox takes effect on click;
 * target, probe method, last sample, loss %, outage count and how long it has
   been monitoring;
 * **Pause / Resume** the monitoring (standby);
@@ -100,7 +103,17 @@ At startup the program decides on its own:
   does **not** have privileges. Nothing is required from the user.
 
 If raw ICMP loses permission at runtime, the monitor switches to `ping`
-automatically.
+automatically. The child `ping` process is launched hidden (CREATE_NO_WINDOW), so
+the windowed build never flashes a console window.
+
+## Localization
+
+The whole UI and the reports are localized through `packetlizer/i18n.py`.
+Built-in languages: **English** and **Portuguese (Brazil)**; the default is
+`auto` (detected from the operating system). Pick one from the **Language**
+selector in the window, or set `"language"` in `config.json` (`"auto"`, `"en"`,
+`"pt_BR"`), or pass `--language`. Adding a language is just another flat
+`dict[str, str]` in `i18n.py`.
 
 ## Where the data lives
 
@@ -123,7 +136,8 @@ reports\                 reports generated from the tray/window
   "outage_min_consecutive": 3,
   "retention_days": 60,
   "db_path": "",
-  "prefer_raw_icmp": true
+  "prefer_raw_icmp": true,
+  "language": "auto"
 }
 ```
 

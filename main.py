@@ -1,12 +1,12 @@
-"""PacketLizer - monitor de estabilidade de conexao (ICMP) com bandeja, relatorios e CSV.
+"""PacketLizer - connection-stability monitor (ICMP) with tray, reports and CSV.
 
-Uso rapido:
-    pythonw main.py                     # inicia monitor + icone na bandeja (modo normal)
-    python  main.py --monitor           # roda so o monitor em primeiro plano (com logs)
+Quick usage:
+    pythonw main.py                     # start monitor + tray icon + window (normal mode)
+    python  main.py --monitor           # run the monitor only, foreground, with logs
     python  main.py --report --format both
     python  main.py --export-csv --out C:\\tmp\\packetlizer.csv
-    python  main.py --install-autostart # registra inicio automatico (sem admin)
-    python  main.py --config            # mostra a configuracao efetiva
+    python  main.py --install-autostart # register start-with-Windows (no admin)
+    python  main.py --config            # print the effective configuration
 """
 import subprocess
 import sys
@@ -38,9 +38,9 @@ def _ensure_deps():
             pass
     except Exception:
         pass
-    print("Instalando dependencias de requirements.txt ...")
+    print("Installing dependencies from requirements.txt ...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(req), "-q"])
-    print("Concluido.")
+    print("Done.")
 
 
 if __name__ == "__main__" and not getattr(sys, "frozen", False):
@@ -49,6 +49,7 @@ if __name__ == "__main__" and not getattr(sys, "frozen", False):
 import argparse  # noqa: E402
 
 from packetlizer.config import Config, load_config  # noqa: E402
+from packetlizer.i18n import set_language  # noqa: E402
 
 
 def _cmd_report(cfg: Config, args) -> int:
@@ -64,7 +65,7 @@ def _cmd_report(cfg: Config, args) -> int:
         until=args.until,
     )
     for p in paths:
-        print(f"Gerado: {p}")
+        print(f"Generated: {p}")
     return 0
 
 
@@ -73,7 +74,7 @@ def _cmd_export_csv(cfg: Config, args) -> int:
 
     out = Path(args.out) if args.out else Path.cwd() / "packetlizer_export.csv"
     n = export_csv(cfg, out, days=args.days, since=args.since, until=args.until)
-    print(f"Exportadas {n} amostras para {out}")
+    print(f"Exported {n} samples to {out}")
     return 0
 
 
@@ -103,32 +104,33 @@ def _cmd_tray(cfg: Config, _args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="packetlizer", description="Monitor de estabilidade de conexao.")
-    p.add_argument("--config-file", help="Caminho para um config.json alternativo.")
-    sub = p.add_subparsers(dest="_sub")
+    p = argparse.ArgumentParser(prog="packetlizer", description="Connection-stability monitor.")
+    p.add_argument("--config-file", help="Path to an alternative config.json.")
 
-    g = p.add_argument_group("modos (sem subcomando = bandeja)")
-    g.add_argument("--monitor", action="store_true", help="Roda so o monitor em primeiro plano.")
-    g.add_argument("--report", action="store_true", help="Gera relatorio sob demanda e sai.")
-    g.add_argument("--export-csv", action="store_true", help="Exporta amostras para CSV e sai.")
-    g.add_argument("--config", action="store_true", help="Mostra a configuracao efetiva e sai.")
-    g.add_argument("--install-autostart", action="store_true", help="Ativa inicio com o Windows.")
-    g.add_argument("--uninstall-autostart", action="store_true", help="Desativa inicio com o Windows.")
+    g = p.add_argument_group("modes (no flag = tray + window)")
+    g.add_argument("--monitor", action="store_true", help="Run the monitor only, foreground.")
+    g.add_argument("--report", action="store_true", help="Generate a report on demand and exit.")
+    g.add_argument("--export-csv", action="store_true", help="Export samples to CSV and exit.")
+    g.add_argument("--config", action="store_true", help="Print the effective configuration and exit.")
+    g.add_argument("--install-autostart", action="store_true", help="Enable start-with-Windows.")
+    g.add_argument("--uninstall-autostart", action="store_true", help="Disable start-with-Windows.")
 
-    p.add_argument("--format", choices=["html", "pdf", "both"], default="both", help="Formato do relatorio.")
-    p.add_argument("--out", help="Arquivo/pasta de saida.")
-    p.add_argument("--days", type=int, default=None, help="Considerar apenas os ultimos N dias.")
-    p.add_argument("--since", help="Data/hora inicial (ISO 8601).")
-    p.add_argument("--until", help="Data/hora final (ISO 8601).")
-    p.add_argument("--mode", choices=["auto", "script", "exe"], default="auto", help="Modo de autostart.")
-    p.add_argument("--startup-folder", action="store_true", help="Usa a pasta Inicializar em vez do registro.")
+    p.add_argument("--format", choices=["html", "pdf", "both"], default="both", help="Report format.")
+    p.add_argument("--out", help="Output file/folder.")
+    p.add_argument("--days", type=int, default=None, help="Consider only the last N days.")
+    p.add_argument("--since", help="Start date/time (ISO 8601).")
+    p.add_argument("--until", help="End date/time (ISO 8601).")
+    p.add_argument("--mode", choices=["auto", "script", "exe"], default="auto", help="Autostart mode.")
+    p.add_argument("--startup-folder", action="store_true",
+                   help="Use the Startup folder instead of the registry.")
 
-    o = p.add_argument_group("sobrescreve a configuracao para esta execucao")
-    o.add_argument("--target", help="Dominio ou IP a ser sondado (ex.: www.vivo.com.br).")
-    o.add_argument("--interval", type=float, help="Segundos entre cada ping.")
-    o.add_argument("--timeout", type=int, help="Timeout de cada ping em ms.")
+    o = p.add_argument_group("override the configuration for this run")
+    o.add_argument("--target", help="Domain or IP to probe (e.g. www.vivo.com.br).")
+    o.add_argument("--interval", type=float, help="Seconds between pings.")
+    o.add_argument("--timeout", type=int, help="Per-ping timeout in ms.")
+    o.add_argument("--language", choices=["auto", "en", "pt_BR"], help="UI/report language.")
     o.add_argument("--duration", type=int, default=None,
-                   help="Com --monitor: encerra automaticamente apos N segundos (prazo de execucao).")
+                   help="With --monitor: stop automatically after N seconds (run deadline).")
     return p
 
 
@@ -139,12 +141,15 @@ def _apply_overrides(cfg: Config, args) -> None:
         cfg.interval_seconds = max(0.2, args.interval)
     if args.timeout:
         cfg.timeout_ms = max(200, args.timeout)
+    if args.language:
+        cfg.language = args.language
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config(args.config_file)
     _apply_overrides(cfg, args)
+    set_language(cfg.language)
 
     if args.config:
         return _cmd_config(cfg, args)

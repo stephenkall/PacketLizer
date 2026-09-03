@@ -1,7 +1,7 @@
-"""Analise das amostras: KPIs, deteccao de quedas (outages) e tendencias.
+"""Sample analysis: KPIs, outage detection and trends.
 
-Tudo aqui e funcao pura sobre uma sequencia de `Sample`, para ser testavel
-sem banco de dados nem rede.
+Everything here is a pure function over a sequence of `Sample`, so it is
+testable without a database or network.
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from .config import STATUS_LABEL, STATUS_OK
 @dataclass
 class Outage:
     start_ts: int
-    end_ts: int          # ts da ultima amostra perdida
-    recovered_ts: int | None  # ts da primeira amostra OK apos a queda (se houve)
+    end_ts: int               # ts of the last lost sample
+    recovered_ts: int | None  # ts of the first OK sample after the outage (if any)
     lost_count: int
     status_kinds: dict[str, int] = field(default_factory=dict)
 
@@ -47,10 +47,10 @@ class Report:
     status_breakdown: dict[str, int]
     latency: dict[str, float]
     daily: list[dict]
-    hour_histogram: list[int]      # 24 posicoes: nº de inicios de queda por hora do dia
-    weekday_histogram: list[int]   # 7 posicoes (0=segunda)
+    hour_histogram: list[int]      # 24 slots: number of outage starts per hour of day
+    weekday_histogram: list[int]   # 7 slots (0 = Monday)
 
-    # ---- KPIs derivados -------------------------------------------------
+    # ---- derived KPIs -------------------------------------------------
     @property
     def span_seconds(self) -> float:
         if self.first_ts is None or self.last_ts is None:
@@ -247,6 +247,7 @@ def analyze(
 
 
 def humanize_seconds(s: float) -> str:
+    """Compact, locale-neutral duration, e.g. "45s", "2m 5s", "1h 20m", "3d 4h"."""
     s = int(round(s))
     if s < 60:
         return f"{s}s"
@@ -255,6 +256,3 @@ def humanize_seconds(s: float) -> str:
     if s < 86400:
         return f"{s // 3600}h {(s % 3600) // 60}m"
     return f"{s // 86400}d {(s % 86400) // 3600}h"
-
-
-WEEKDAY_PT = ["Segunda", "Terca", "Quarta", "Quinta", "Sexta", "Sabado", "Domingo"]

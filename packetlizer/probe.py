@@ -1,11 +1,11 @@
-"""Sondagem de rede: ICMP raw (icmplib, precisa admin) e fallback pelo ping do SO.
+"""Network probing: raw ICMP (icmplib, needs admin) with an OS-``ping`` fallback.
 
-`select_probe()` escolhe automaticamente:
-  * ICMP raw  -> se o processo tem privilegio (admin/root) e o socket raw abre;
-  * ping.exe  -> caso contrario (nao exige privilegio nenhum).
+``select_probe()`` chooses automatically:
+  * raw ICMP  -> if the process is privileged (admin/root) and a raw socket opens;
+  * OS ping   -> otherwise (requires no privileges at all).
 
-Se o ICMP raw falhar em tempo de execucao por permissao, o RawIcmpProbe
-levanta PermissionError e o monitor troca para o PingExeProbe.
+If raw ICMP loses permission at runtime the RawIcmpProbe raises PermissionError
+and the monitor switches to the PingExeProbe.
 """
 from __future__ import annotations
 
@@ -19,6 +19,11 @@ from dataclasses import dataclass
 
 from .config import STATUS_DNS_FAIL, STATUS_OK, STATUS_TIMEOUT, STATUS_UNREACHABLE
 
+# select_probe() returns one of these keys; the UI translates them via i18n.
+REASON_RAW_PRIVILEGED = "raw_privileged"
+REASON_PING_NO_ADMIN = "ping_no_admin"
+REASON_PING_RAW_UNAVAILABLE = "ping_raw_unavailable"
+
 
 @dataclass(frozen=True)
 class ProbeResult:
@@ -27,7 +32,7 @@ class ProbeResult:
 
 
 def is_privileged() -> bool:
-    """True se o processo pode abrir sockets ICMP raw."""
+    """True if the process can open raw ICMP sockets."""
     if sys.platform.startswith("win"):
         try:
             return bool(ctypes.windll.shell32.IsUserAnAdmin())
@@ -39,11 +44,27 @@ def is_privileged() -> bool:
         return False
 
 
+def _no_window_popen_kwargs() -> dict:
+    """Keep the child ``ping`` process from flashing a console window.
+
+    A windowed (``--noconsole``) PyInstaller build has no console of its own, so
+    every ``subprocess`` call would otherwise pop a brief cmd window. CREATE_NO_WINDOW
+    plus a hidden STARTUPINFO suppress it. No-op on non-Windows.
+    """
+    if not sys.platform.startswith("win"):
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return {"startupinfo": startupinfo, "creationflags": creationflags}
+
+
 # --------------------------------------------------------------------------
-# Parser do texto do `ping` do SO -- funcao pura, coberta por testes.
+# Parser for the OS ``ping`` text -- pure function, covered by tests.
 # --------------------------------------------------------------------------
-# Exige o separador "=" ou "<" para nao confundir com o "time 0ms" da linha de
-# resumo do ping do Linux ("... 100% packet loss, time 0ms").
+# Require the "=" or "<" separator so we don't match the "time 0ms" of the Linux
+# ping summary line ("... 100% packet loss, time 0ms").
 _TIME_RE = re.compile(
     r"(?:time|tempo|tiempo|zeit|dur[ée]e|durata|temps)\s*[=<]\s*([\d]+(?:[.,]\d+)?)\s*ms",
     re.IGNORECASE,
@@ -62,7 +83,7 @@ _DNS_RE = re.compile(
 
 
 def parse_ping_output(text: str, returncode: int | None = None) -> ProbeResult:
-    """Interpreta a saida de um `ping -c/-n 1`. Independente de locale."""
+    """Interpret the output of a ``ping -c/-n 1``. Locale-independent."""
     if _DNS_RE.search(text):
         return ProbeResult(None, STATUS_DNS_FAIL)
 
@@ -75,12 +96,12 @@ def parse_ping_output(text: str, returncode: int | None = None) -> ProbeResult:
 
     if _UNREACH_RE.search(text):
         return ProbeResult(None, STATUS_UNREACHABLE)
-    # "100% packet loss", "Esgotado o tempo limite", "Request timed out", etc.
+    # "100% packet loss", "Request timed out", "Esgotado o tempo limite", etc.
     return ProbeResult(None, STATUS_TIMEOUT)
 
 
 class PingExeProbe:
-    """Chama o `ping` do sistema operacional e faz parse da saida."""
+    """Calls the operating system's ``ping`` and parses its output."""
 
     name = "ping"
 
@@ -104,16 +125,17 @@ class PingExeProbe:
                 timeout=self.timeout_ms / 1000 + 3,
                 encoding="utf-8",
                 errors="replace",
+                **_no_window_popen_kwargs(),
             )
         except subprocess.TimeoutExpired:
             return ProbeResult(None, STATUS_TIMEOUT)
         except FileNotFoundError:
-            raise RuntimeError("comando 'ping' nao encontrado no sistema")
+            raise RuntimeError("'ping' command not found on this system")
         return parse_ping_output((proc.stdout or "") + "\n" + (proc.stderr or ""), proc.returncode)
 
 
 class RawIcmpProbe:
-    """ICMP raw via icmplib. Requer privilegio; levanta PermissionError se faltar."""
+    """Raw ICMP via icmplib. Requires privileges; raises PermissionError if missing."""
 
     name = "icmp-raw"
 
@@ -123,10 +145,7 @@ class RawIcmpProbe:
 
     def probe(self) -> ProbeResult:
         from icmplib import ping as _ping
-        from icmplib.exceptions import (
-            NameLookupError,
-            SocketPermissionError,
-        )
+        from icmplib.exceptions import NameLookupError, SocketPermissionError
 
         try:
             host = _ping(self.target, count=1, timeout=self.timeout_s, privileged=True)
@@ -143,22 +162,22 @@ class RawIcmpProbe:
 
 
 def select_probe(target: str, timeout_ms: int, prefer_raw: bool = True):
-    """Devolve (probe, motivo_str)."""
+    """Return ``(probe, reason_key)`` where reason_key is one of the REASON_* keys."""
     if prefer_raw and is_privileged():
         try:
             p = RawIcmpProbe(target, timeout_ms)
-            p.probe()  # teste de fumaca
-            return p, "ICMP raw (processo com privilegio)"
+            p.probe()  # smoke test
+            return p, REASON_RAW_PRIVILEGED
         except PermissionError:
             pass
         except Exception:
             pass
-    reason = "ping do SO (sem privilegio de admin)" if not is_privileged() else "ping do SO (ICMP raw indisponivel)"
+    reason = REASON_PING_NO_ADMIN if not is_privileged() else REASON_PING_RAW_UNAVAILABLE
     return PingExeProbe(target, timeout_ms), reason
 
 
 def timed_probe(probe) -> tuple[ProbeResult, float]:
-    """Executa a sonda e devolve (resultado, duracao_wall_ms)."""
+    """Run the probe and return ``(result, wall_duration_ms)``."""
     t0 = time.perf_counter()
     res = probe.probe()
     return res, (time.perf_counter() - t0) * 1000

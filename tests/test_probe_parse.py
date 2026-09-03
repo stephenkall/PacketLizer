@@ -4,7 +4,7 @@ from packetlizer.config import (
     STATUS_TIMEOUT,
     STATUS_UNREACHABLE,
 )
-from packetlizer.probe import parse_ping_output
+from packetlizer.probe import _no_window_popen_kwargs, parse_ping_output
 
 WIN_PT_OK = """
 Disparando www.vivo.com.br [200.155.4.10] com 32 bytes de dados:
@@ -89,3 +89,15 @@ def test_sub_millisecond():
     r = parse_ping_output(SUBMS, 0)
     assert r.status == STATUS_OK
     assert r.rtt_ms is not None and r.rtt_ms < 1
+
+
+def test_no_window_popen_kwargs_shape():
+    import sys
+
+    kw = _no_window_popen_kwargs()
+    if sys.platform.startswith("win"):
+        # hide the child console window in a windowed build
+        assert "creationflags" in kw and kw["creationflags"] != 0
+        assert "startupinfo" in kw
+    else:
+        assert kw == {}
