@@ -1,7 +1,10 @@
 import csv
 from datetime import datetime
 
+import pytest
+
 from packetlizer.config import Config, load_config
+from packetlizer.i18n import set_language
 from packetlizer.report import (
     _load_report,
     _load_reports,
@@ -11,6 +14,14 @@ from packetlizer.report import (
 )
 from packetlizer.storage import Storage
 from packetlizer.config import STATUS_OK, STATUS_TIMEOUT
+
+
+@pytest.fixture(autouse=True)
+def _english_ui():
+    """Reports are language-dependent; pin English for deterministic assertions."""
+    set_language("en")
+    yield
+    set_language("en")
 
 
 def test_parse_report_dates_empty_means_open_ended():
@@ -78,8 +89,19 @@ def test_generate_reports_html_pdf_csv(tmp_path):
     for p in made:
         assert p.exists() and p.stat().st_size > 0
     html = next(p for p in made if p.suffix == ".html").read_text(encoding="utf-8")
-    assert "Perda de pacotes" in html
+    assert "Packet loss" in html
     assert "data:image/png;base64," in html
+
+
+def test_report_language_switches_with_i18n(tmp_path):
+    db = tmp_path / "d.db"
+    _seed(db)
+    cfg = Config(db_path=str(db))
+    set_language("pt_BR")
+    made = generate_reports(cfg, out_dir=tmp_path / "pt", fmt="html")
+    html = next(p for p in made if p.suffix == ".html").read_text(encoding="utf-8")
+    assert "Perda de pacotes" in html
+    assert 'lang="pt-br"' in html
 
 
 def test_report_uses_configured_timeout_as_chart_sentinel(tmp_path):
@@ -112,9 +134,9 @@ def test_report_separates_blocks_by_target(tmp_path):
 
     made = generate_reports(cfg, out_dir=tmp_path / "out", fmt="both")
     html = next(p for p in made if p.suffix == ".html").read_text(encoding="utf-8")
-    assert "Alvo: www.vivo.com.br" in html
-    assert "Alvo: 1.1.1.1" in html
-    assert html.count("Latencia ao longo do tempo") == 2
+    assert "Target: www.vivo.com.br" in html
+    assert "Target: 1.1.1.1" in html
+    assert html.count('class="target-block"') == 2
 
     csv_path = next(p for p in made if p.suffix == ".csv")
     rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))

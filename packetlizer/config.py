@@ -1,10 +1,10 @@
-"""Carregamento e persistencia da configuracao do PacketLizer.
+"""Loading and persistence of the PacketLizer configuration.
 
-A config e os dados ficam em %LOCALAPPDATA%\\PacketLizer (Windows) ou
-~/.local/share/PacketLizer (outros SOs), de proposito FORA da pasta do repo
-(que pode estar no OneDrive e sob controle de versao).
+Config and data live in %LOCALAPPDATA%\\PacketLizer (Windows) or
+~/.local/share/PacketLizer (other OSes), deliberately OUTSIDE the repo folder
+(which may be in OneDrive and under version control).
 
-Pode ser sobrescrito com a variavel de ambiente PACKETLIZER_HOME.
+Can be overridden with the PACKETLIZER_HOME environment variable.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-# Status de cada amostra.
+# Per-sample status codes.
 STATUS_OK = 0
 STATUS_TIMEOUT = 1
 STATUS_UNREACHABLE = 2
@@ -43,17 +43,19 @@ def app_home() -> Path:
 class Config:
     target: str = "www.vivo.com.br"
     interval_seconds: float = 1.0
-    # Timeout de cada ping (ms). Tambem e o valor de latencia usado no grafico do
-    # relatorio para representar um pacote perdido (linha "timeout").
+    # Per-ping timeout (ms). Also the latency value used on the report chart to
+    # represent a lost packet (the "timeout" line).
     timeout_ms: int = 2000
-    # Numero minimo de perdas consecutivas para contar como uma "queda" (outage).
+    # Minimum number of consecutive losses that counts as one outage.
     outage_min_consecutive: int = 3
-    # Dados mais antigos que isto sao apagados no arranque do monitor.
-    # 0 (ou negativo) = retencao ILIMITADA, nada e apagado.
+    # Data older than this is deleted at monitor startup.
+    # 0 (or negative) = UNLIMITED retention, nothing is deleted.
     retention_days: int = 60
     db_path: str = ""
-    # Preferir ICMP raw (precisa admin); se indisponivel cai para o ping do SO.
+    # Prefer raw ICMP (needs admin); falls back to the OS ping when unavailable.
     prefer_raw_icmp: bool = True
+    # UI language code: "auto" (detect from the OS), "en", "pt_BR".
+    language: str = "auto"
 
     _source_path: Path = field(default=None, repr=False, compare=False)
     _created: bool = field(default=False, repr=False, compare=False)
@@ -64,8 +66,7 @@ class Config:
         return app_home() / "packetlizer.db"
 
     def to_json(self) -> dict[str, Any]:
-        d = {k: v for k, v in asdict(self).items() if not k.startswith("_")}
-        return d
+        return {k: v for k, v in asdict(self).items() if not k.startswith("_")}
 
     def save(self, path: Path | None = None) -> Path:
         path = Path(path) if path else (self._source_path or (app_home() / "config.json"))
@@ -75,12 +76,12 @@ class Config:
         return path
 
     def describe(self) -> str:
-        lines = ["Configuracao efetiva do PacketLizer:"]
-        lines.append(f"  arquivo de config : {self._source_path}")
+        lines = ["PacketLizer effective configuration:"]
+        lines.append(f"  config file : {self._source_path}")
         for k, v in self.to_json().items():
             lines.append(f"  {k:<20}: {v}")
-        lines.append(f"  banco de dados     : {self.resolved_db_path()}")
-        lines.append(f"  pasta de dados     : {app_home()}")
+        lines.append(f"  database    : {self.resolved_db_path()}")
+        lines.append(f"  data folder : {app_home()}")
         return "\n".join(lines)
 
 

@@ -1,7 +1,7 @@
-"""Laco de monitoramento: sonda o alvo em cadencia fixa e grava no SQLite.
+"""Monitoring loop: probes the target at a fixed cadence and writes to SQLite.
 
-Pode rodar em primeiro plano (`--monitor`, com logs e Ctrl+C gracioso) ou
-dentro de uma thread do app de bandeja.
+Runs either in the foreground (``--monitor``, with logs and graceful Ctrl+C) or
+inside a thread of the tray app.
 """
 from __future__ import annotations
 
@@ -18,13 +18,22 @@ from .storage import Storage
 
 log = logging.getLogger("packetlizer.monitor")
 
+# Stable state keys; the UI maps them to localized text, logs use the English name.
+_STATE_NAMES_EN = {
+    "paused": "paused (standby)",
+    "starting": "starting",
+    "outage": "OUTAGE in progress",
+    "unstable": "unstable (recent losses)",
+    "running": "running",
+}
+
 
 @dataclass
 class LiveState:
-    """Estado compartilhado com a bandeja (thread-safe o suficiente para leitura)."""
+    """State shared with the tray app (read-only enough to be thread-safe)."""
 
     probe_name: str = "?"
-    probe_reason: str = ""
+    probe_reason: str = ""  # a probe.REASON_* key; the UI localizes it
     last_ts: float = 0.0
     last_status: int = STATUS_OK
     last_rtt_ms: float | None = None
@@ -37,16 +46,21 @@ class LiveState:
     started_at: float = field(default_factory=time.time)
 
     @property
-    def state_name(self) -> str:
+    def state_key(self) -> str:
         if self.paused:
-            return "Em pausa (standby)"
+            return "paused"
         if self.total == 0:
-            return "Iniciando..."
+            return "starting"
         if self.in_outage:
-            return "QUEDA em andamento"
+            return "outage"
         if self.consecutive_lost > 0:
-            return "Instavel (perdas recentes)"
-        return "Em execucao"
+            return "unstable"
+        return "running"
+
+    @property
+    def state_name(self) -> str:
+        """English label, for logs. The window uses ``state_key`` + i18n."""
+        return _STATE_NAMES_EN[self.state_key]
 
     @property
     def loss_pct(self) -> float:
@@ -86,7 +100,7 @@ class Monitor:
             cutoff = int(time.time() - self.cfg.retention_days * 86400)
             removed = st.purge_older_than(cutoff)
             if removed:
-                log.info("Retencao: %d amostras antigas removidas; compactando...", removed)
+                log.info("Retention: removed %d old samples; compacting...", removed)
                 st.vacuum()
 
     def run(self) -> None:
@@ -102,7 +116,7 @@ class Monitor:
         st.set_meta("probe", probe.name)
         st.set_meta("interval_seconds", str(cfg.interval_seconds))
         st.set_meta("timeout_ms", str(cfg.timeout_ms))
-        log.info("Monitorando %s via %s (%s). Intervalo=%.1fs", cfg.target, probe.name, reason, cfg.interval_seconds)
+        log.info("Monitoring %s via %s (%s). interval=%.1fs", cfg.target, probe.name, reason, cfg.interval_seconds)
 
         pending = 0
         last_flush = time.monotonic()
@@ -115,25 +129,25 @@ class Monitor:
                         st.commit()
                         pending = 0
                     self.state.paused = True
-                    log.info("Monitor em pausa (standby).")
+                    log.info("Monitor paused (standby).")
                 self._stop.wait(0.5)
                 continue
             if self.state.paused:
                 self.state.paused = False
-                log.info("Monitor retomado.")
+                log.info("Monitor resumed.")
 
             cycle_start = time.monotonic()
             ts = int(time.time())
             try:
                 res: ProbeResult = probe.probe()
             except PermissionError:
-                log.warning("ICMP raw perdeu privilegio; trocando para o ping do SO.")
-                probe, reason = (select_probe(cfg.target, cfg.timeout_ms, prefer_raw=False))
+                log.warning("Raw ICMP lost privileges; switching to the OS ping.")
+                probe, reason = select_probe(cfg.target, cfg.timeout_ms, prefer_raw=False)
                 self.state.probe_name, self.state.probe_reason = probe.name, reason
                 st.set_meta("probe", probe.name)
                 continue
-            except Exception as e:  # nunca derruba o monitor por um erro pontual
-                log.debug("Erro na sonda: %s", e)
+            except Exception as e:  # never let a one-off error kill the monitor
+                log.debug("Probe error: %s", e)
                 res = ProbeResult(None, 1)
 
             st.add(res.rtt_ms, res.status, ts, target=cfg.target)
@@ -151,7 +165,7 @@ class Monitor:
 
         st.commit()
         st.close()
-        log.info("Monitor encerrado. total=%d perdas=%d (%.2f%%) quedas=%d",
+        log.info("Monitor stopped. total=%d lost=%d (%.2f%%) outages=%d",
                  self.state.total, self.state.lost, self.state.loss_pct, self.state.outages)
 
     def _update_state(self, res: ProbeResult, ts: int) -> None:
@@ -170,15 +184,15 @@ class Monitor:
             if not s.in_outage and s.consecutive_lost >= self.cfg.outage_min_consecutive:
                 s.in_outage = True
                 s.outages += 1
-                log.warning("QUEDA detectada as %s (%d perdas consecutivas, status=%s)",
+                log.warning("OUTAGE detected at %s (%d consecutive losses, status=%s)",
                             time.strftime("%H:%M:%S", time.localtime(ts)),
                             s.consecutive_lost, STATUS_LABEL.get(res.status, "?"))
 
 
 def run_monitor_foreground(cfg: Config, duration: float | None = None) -> int:
-    """Modo headless (--monitor): sem janela nem icone, so logs no console.
+    """Headless mode (--monitor): no window or icon, console logs only.
 
-    `duration` (segundos) encerra automaticamente ao fim do prazo.
+    ``duration`` (seconds) stops automatically when the deadline is reached.
     """
     import sys
 
@@ -188,15 +202,15 @@ def run_monitor_foreground(cfg: Config, duration: float | None = None) -> int:
         datefmt="%Y-%m-%d %H:%M:%S",
         stream=sys.stdout,
     )
-    print(f"PacketLizer -- monitor headless. Alvo={cfg.target} intervalo={cfg.interval_seconds}s "
-          f"db={cfg.resolved_db_path()}" + (f" prazo={duration}s" if duration else ""), flush=True)
+    print(f"PacketLizer -- headless monitor. target={cfg.target} interval={cfg.interval_seconds}s "
+          f"db={cfg.resolved_db_path()}" + (f" deadline={duration}s" if duration else ""), flush=True)
 
     mon = Monitor(cfg)
 
     def _handler(_sig, _frm):
         if mon._stop.is_set():
             raise SystemExit(1)
-        log.info("Ctrl+C -> encerrando e salvando progresso (pressione de novo para forcar).")
+        log.info("Ctrl+C -> stopping and saving progress (press again to force-quit).")
         mon.request_stop()
 
     signal.signal(signal.SIGINT, _handler)
@@ -215,11 +229,11 @@ def run_monitor_foreground(cfg: Config, duration: float | None = None) -> int:
             s = mon.state
             if s.total and (now - last_hb) >= 15:
                 last_hb = now
-                log.info("[status] %s | amostras=%d perda=%.2f%% quedas=%d ultima=%s",
+                log.info("[status] %s | samples=%d loss=%.2f%% outages=%d last=%s",
                          s.state_name, s.total, s.loss_pct, s.outages,
                          STATUS_LABEL.get(s.last_status, "?"))
             if duration and (now - start) >= duration:
-                log.info("Prazo de execucao de %ss atingido; encerrando.", duration)
+                log.info("Run deadline of %ss reached; stopping.", duration)
                 mon.request_stop()
                 break
     except SystemExit:
