@@ -145,7 +145,7 @@ class TrayApp:
             ("Intervalo entre pings (s)", "interval"),
             ("Timeout por ping (ms)", "timeout"),
             ("Perdas seguidas p/ contar queda", "omin"),
-            ("Retencao do historico (dias)", "ret"),
+            ("Retencao do historico (dias, 0 = ilimitada)", "ret"),
         ]
         for i, (label, key) in enumerate(conf_rows):
             ttk.Label(conf, text=label + ":").grid(row=i, column=0, sticky="w", padx=8, pady=3)
@@ -179,8 +179,9 @@ class TrayApp:
                   foreground="#6b7280").grid(row=2, column=0, columnspan=2, sticky="w", padx=8)
         self._report_btn = ttk.Button(rep, text="Gerar relatorio", command=self._on_report)
         self._report_btn.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 4))
-        self._report_status = ttk.Label(rep, text="", foreground="#6b7280")
-        self._report_status.grid(row=4, column=0, columnspan=2, sticky="w", padx=8)
+        self._report_status = ttk.Label(rep, text="", foreground="#6b7280",
+                                        wraplength=430, justify="left")
+        self._report_status.grid(row=4, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
 
         btns = ttk.Frame(root)
         btns.pack(fill="x", **pad)
@@ -277,39 +278,54 @@ class TrayApp:
         paused = self.monitor.toggle_pause()
         self._notify("Monitoramento pausado (standby)." if paused else "Monitoramento retomado.")
 
+    def _read_config_fields(self) -> dict:
+        """Le e valida os campos da janela. Levanta ValueError com mensagem em pt-br."""
+        g = self._cfg_vars
+        target = g["target"].get().strip()
+        if not target:
+            raise ValueError("Informe um dominio ou IP no campo 'Alvo'.")
+        if " " in target:
+            raise ValueError("O alvo nao pode conter espacos.")
+        try:
+            interval = float(g["interval"].get().strip().replace(",", "."))
+            timeout = int(float(g["timeout"].get().strip()))
+            omin = int(g["omin"].get().strip())
+            ret = int(g["ret"].get().strip())
+        except ValueError:
+            raise ValueError("Intervalo, timeout, perdas e retencao devem ser numeros.")
+        if interval < 0.2:
+            raise ValueError("O intervalo minimo entre pings e 0,2 s.")
+        if timeout < 200:
+            raise ValueError("O timeout minimo e 200 ms.")
+        if omin < 1:
+            raise ValueError("'Perdas seguidas p/ contar queda' precisa ser >= 1.")
+        if ret < 0:
+            raise ValueError("Retencao invalida. Use 0 para retencao ilimitada.")
+        return {"target": target, "interval_seconds": interval, "timeout_ms": timeout,
+                "outage_min_consecutive": omin, "retention_days": ret}
+
+    def _apply_fields_to_cfg(self, vals: dict) -> bool:
+        """Copia os valores para self.cfg. Retorna True se alvo/intervalo/timeout mudaram."""
+        changed_probe = (vals["target"] != self.cfg.target
+                         or vals["interval_seconds"] != self.cfg.interval_seconds
+                         or vals["timeout_ms"] != self.cfg.timeout_ms)
+        self.cfg.target = vals["target"]
+        self.cfg.interval_seconds = vals["interval_seconds"]
+        self.cfg.timeout_ms = vals["timeout_ms"]
+        self.cfg.outage_min_consecutive = vals["outage_min_consecutive"]
+        self.cfg.retention_days = vals["retention_days"]
+        return changed_probe
+
     def _on_apply_config(self, *_):
         from tkinter import messagebox
 
-        g = self._cfg_vars
         try:
-            target = g["target"].get().strip()
-            if not target:
-                raise ValueError("Informe um dominio ou IP no campo 'Alvo'.")
-            if " " in target:
-                raise ValueError("O alvo nao pode conter espacos.")
-            interval = float(g["interval"].get().strip().replace(",", "."))
-            if interval < 0.2:
-                raise ValueError("O intervalo minimo entre pings e 0,2 s.")
-            timeout = int(float(g["timeout"].get().strip()))
-            if timeout < 200:
-                raise ValueError("O timeout minimo e 200 ms.")
-            omin = int(g["omin"].get().strip())
-            if omin < 1:
-                raise ValueError("'Perdas seguidas p/ contar queda' precisa ser >= 1.")
-            ret = int(g["ret"].get().strip())
-            if ret < 0:
-                raise ValueError("A retencao nao pode ser negativa (use 0 para nunca apagar).")
+            vals = self._read_config_fields()
         except ValueError as e:
             messagebox.showerror("Configuracao invalida", str(e))
             return
 
-        changed_probe = (target != self.cfg.target or interval != self.cfg.interval_seconds
-                         or timeout != self.cfg.timeout_ms)
-        self.cfg.target = target
-        self.cfg.interval_seconds = interval
-        self.cfg.timeout_ms = timeout
-        self.cfg.outage_min_consecutive = omin
-        self.cfg.retention_days = ret
+        changed_probe = self._apply_fields_to_cfg(vals)
         try:
             path = self.cfg.save()
         except OSError as e:
@@ -326,6 +342,19 @@ class TrayApp:
             self._cfg_status.config(
                 text=f"Salvo em {path.name}. Ajustes aplicados sem reiniciar o monitor.",
                 foreground="#15803d")
+
+    def _persist_config_on_exit(self) -> None:
+        """Salva a configuracao ao encerrar, incluindo edicoes ainda nao aplicadas."""
+        try:
+            self._apply_fields_to_cfg(self._read_config_fields())
+        except ValueError:
+            pass  # campo invalido: salva a ultima config valida em memoria
+        except Exception:
+            pass
+        try:
+            self.cfg.save()
+        except OSError:
+            log.warning("Nao consegui salvar a configuracao ao encerrar.")
 
     def _restart_monitor(self):
         self.monitor.request_stop()
@@ -355,7 +384,8 @@ class TrayApp:
                                          since=since or None, until=until or None)
                 names = ", ".join(p.name for p in paths)
                 self._notify("Relatorio gerado: " + names)
-                self._set_report_status(f"OK: {names}  (pasta: {out})", ok=True)
+                self._set_report_status(
+                    f"OK - {len(paths)} arquivos gerados em:\n{out}", ok=True)
                 for p in paths:
                     if p.suffix == ".html":
                         webbrowser.open(p.as_uri())
@@ -393,6 +423,7 @@ class TrayApp:
                 pass
         self._shutting_down = True
         log.info("Encerrando...")
+        self._persist_config_on_exit()
         self.monitor.request_stop()
         if self._mon_thread:
             self._mon_thread.join(timeout=8)

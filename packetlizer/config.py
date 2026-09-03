@@ -15,9 +15,6 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-# Latencia (ms) usada para representar um pacote perdido nos graficos.
-DEFAULT_TIMEOUT_SENTINEL_MS = 9999.0
-
 # Status de cada amostra.
 STATUS_OK = 0
 STATUS_TIMEOUT = 1
@@ -46,11 +43,13 @@ def app_home() -> Path:
 class Config:
     target: str = "www.vivo.com.br"
     interval_seconds: float = 1.0
+    # Timeout de cada ping (ms). Tambem e o valor de latencia usado no grafico do
+    # relatorio para representar um pacote perdido (linha "timeout").
     timeout_ms: int = 2000
-    timeout_sentinel_ms: float = DEFAULT_TIMEOUT_SENTINEL_MS
     # Numero minimo de perdas consecutivas para contar como uma "queda" (outage).
     outage_min_consecutive: int = 3
-    # Dados mais antigos que isto sao apagados no arranque do monitor (0 = nunca).
+    # Dados mais antigos que isto sao apagados no arranque do monitor.
+    # 0 (ou negativo) = retencao ILIMITADA, nada e apagado.
     retention_days: int = 60
     db_path: str = ""
     # Preferir ICMP raw (precisa admin); se indisponivel cai para o ping do SO.
