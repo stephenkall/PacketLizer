@@ -57,6 +57,7 @@ class Config:
     prefer_raw_icmp: bool = True
 
     _source_path: Path = field(default=None, repr=False, compare=False)
+    _created: bool = field(default=False, repr=False, compare=False)
 
     def resolved_db_path(self) -> Path:
         if self.db_path:
@@ -96,6 +97,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     cfg = Config(**{k: v for k, v in data.items() if k in known})
     cfg._source_path = cfg_path
     if not cfg_path.exists():
+        cfg._created = True
         try:
             cfg.save(cfg_path)
         except OSError:

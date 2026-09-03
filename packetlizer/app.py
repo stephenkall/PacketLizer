@@ -110,9 +110,15 @@ class TrayApp:
 
         self._root = root = tk.Tk()
         root.title("PacketLizer")
-        root.geometry("460x430")
-        root.minsize(420, 400)
+        root.geometry("470x640")
+        root.minsize(440, 560)
         root.protocol("WM_DELETE_WINDOW", self._hide_window)
+        # semi-invisivel: sem botao na barra de tarefas, comeca escondida no tray
+        try:
+            root.attributes("-toolwindow", True)
+        except tk.TclError:
+            pass
+        root.withdraw()
 
         pad = {"padx": 12, "pady": 6}
         header = ttk.Frame(root)
@@ -122,6 +128,33 @@ class TrayApp:
         self._dot_id = self._dot.create_oval(2, 2, 16, 16, fill="#94a3b8", outline="")
         self._state_lbl = ttk.Label(header, text="Iniciando...", font=("Segoe UI", 13, "bold"))
         self._state_lbl.pack(side="left", padx=8)
+
+        # ---- configuracao editavel -----------------------------------
+        conf = ttk.LabelFrame(root, text="Configuracao")
+        conf.pack(fill="x", **pad)
+        conf.columnconfigure(1, weight=1)
+        self._cfg_vars = {
+            "target": tk.StringVar(value=self.cfg.target),
+            "interval": tk.StringVar(value=f"{self.cfg.interval_seconds:g}"),
+            "timeout": tk.StringVar(value=str(self.cfg.timeout_ms)),
+            "omin": tk.StringVar(value=str(self.cfg.outage_min_consecutive)),
+            "ret": tk.StringVar(value=str(self.cfg.retention_days)),
+        }
+        conf_rows = [
+            ("Alvo (dominio ou IP)", "target"),
+            ("Intervalo entre pings (s)", "interval"),
+            ("Timeout por ping (ms)", "timeout"),
+            ("Perdas seguidas p/ contar queda", "omin"),
+            ("Retencao do historico (dias)", "ret"),
+        ]
+        for i, (label, key) in enumerate(conf_rows):
+            ttk.Label(conf, text=label + ":").grid(row=i, column=0, sticky="w", padx=8, pady=3)
+            ttk.Entry(conf, textvariable=self._cfg_vars[key]).grid(
+                row=i, column=1, sticky="ew", padx=8, pady=3)
+        self._apply_btn = ttk.Button(conf, text="Salvar e aplicar", command=self._on_apply_config)
+        self._apply_btn.grid(row=len(conf_rows), column=0, columnspan=2, sticky="ew", padx=8, pady=(6, 3))
+        self._cfg_status = ttk.Label(conf, text="", foreground="#6b7280", wraplength=420)
+        self._cfg_status.grid(row=len(conf_rows) + 1, column=0, columnspan=2, sticky="w", padx=8)
 
         info = ttk.LabelFrame(root, text="Status")
         info.pack(fill="x", **pad)
@@ -161,6 +194,13 @@ class TrayApp:
         self._icon = pystray.Icon("PacketLizer", _make_icon_image(_GREY), "PacketLizer",
                                   menu=self._build_menu())
         threading.Thread(target=self._icon.run, name="tray", daemon=True).start()
+
+        if getattr(self.cfg, "_created", False):
+            # primeira execucao: mostra a janela para o usuario definir o dominio
+            root.after(500, self._do_show)
+        else:
+            root.after(800, lambda: self._notify(
+                "PacketLizer rodando na bandeja. Clique no icone para abrir a janela."))
 
         self._tick()
         root.mainloop()
@@ -236,6 +276,65 @@ class TrayApp:
     def _on_toggle_pause(self, *_):
         paused = self.monitor.toggle_pause()
         self._notify("Monitoramento pausado (standby)." if paused else "Monitoramento retomado.")
+
+    def _on_apply_config(self, *_):
+        from tkinter import messagebox
+
+        g = self._cfg_vars
+        try:
+            target = g["target"].get().strip()
+            if not target:
+                raise ValueError("Informe um dominio ou IP no campo 'Alvo'.")
+            if " " in target:
+                raise ValueError("O alvo nao pode conter espacos.")
+            interval = float(g["interval"].get().strip().replace(",", "."))
+            if interval < 0.2:
+                raise ValueError("O intervalo minimo entre pings e 0,2 s.")
+            timeout = int(float(g["timeout"].get().strip()))
+            if timeout < 200:
+                raise ValueError("O timeout minimo e 200 ms.")
+            omin = int(g["omin"].get().strip())
+            if omin < 1:
+                raise ValueError("'Perdas seguidas p/ contar queda' precisa ser >= 1.")
+            ret = int(g["ret"].get().strip())
+            if ret < 0:
+                raise ValueError("A retencao nao pode ser negativa (use 0 para nunca apagar).")
+        except ValueError as e:
+            messagebox.showerror("Configuracao invalida", str(e))
+            return
+
+        changed_probe = (target != self.cfg.target or interval != self.cfg.interval_seconds
+                         or timeout != self.cfg.timeout_ms)
+        self.cfg.target = target
+        self.cfg.interval_seconds = interval
+        self.cfg.timeout_ms = timeout
+        self.cfg.outage_min_consecutive = omin
+        self.cfg.retention_days = ret
+        try:
+            path = self.cfg.save()
+        except OSError as e:
+            messagebox.showerror("Erro ao salvar", str(e))
+            return
+
+        if changed_probe:
+            self._restart_monitor()
+            self._cfg_status.config(
+                text=f"Salvo em {path.name}. Monitor reiniciado com o novo alvo; "
+                     f"as estatisticas desta sessao recomecam.",
+                foreground="#15803d")
+        else:
+            self._cfg_status.config(
+                text=f"Salvo em {path.name}. Ajustes aplicados sem reiniciar o monitor.",
+                foreground="#15803d")
+
+    def _restart_monitor(self):
+        self.monitor.request_stop()
+        if self._mon_thread:
+            self._mon_thread.join(timeout=8)
+        self.state = LiveState()
+        self.monitor = Monitor(self.cfg, self.state)
+        self._mon_thread = threading.Thread(target=self._run_monitor, name="monitor", daemon=True)
+        self._mon_thread.start()
 
     def _on_report(self, *_, all_data: bool = False):
         if self._report_busy:
