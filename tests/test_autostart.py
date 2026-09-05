@@ -1,8 +1,24 @@
 import sys
+import types
 
 import pytest
 
 from packetlizer import autostart
+
+
+class _FakeWinreg(types.ModuleType):
+    """Stands in for the stdlib ``winreg`` module on non-Windows CI runners.
+
+    Tests here never exercise the real registry-fallback path (that's
+    monkeypatched separately) -- this only needs to satisfy
+    ``is_autostart_enabled``'s ``import winreg`` / ``OpenKey`` probe, acting
+    as if the Run key never has our value set.
+    """
+
+    HKEY_CURRENT_USER = object()
+
+    def OpenKey(self, *_a, **_k):
+        raise FileNotFoundError()
 
 
 @pytest.fixture(autouse=True)
@@ -10,6 +26,8 @@ def _fake_windows(monkeypatch, tmp_path):
     monkeypatch.setattr(autostart.sys, "platform", "win32")
     monkeypatch.setattr(autostart, "_repo_root", lambda: tmp_path)
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
+    if sys.platform != "win32":
+        monkeypatch.setitem(sys.modules, "winreg", _FakeWinreg("winreg"))
     yield
 
 
