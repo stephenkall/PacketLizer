@@ -16,6 +16,11 @@ import os
 import sys
 from pathlib import Path
 
+try:
+    import winreg  # type: ignore
+except ImportError:  # non-Windows: registry methods below become no-ops
+    winreg = None  # type: ignore
+
 APP_NAME = "PacketLizer"
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -62,7 +67,8 @@ def _set_via_startup_folder(enable: bool, cmd: str) -> tuple[bool, str]:
 
 
 def _set_via_registry(enable: bool, cmd: str) -> tuple[bool, str]:
-    import winreg  # type: ignore
+    if winreg is None:
+        raise OSError("winreg is not available on this platform")
 
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_ALL_ACCESS) as key:
         if enable:
@@ -116,9 +122,9 @@ def is_autostart_enabled() -> bool:
         return False
     if _startup_cmdfile().exists():
         return True
+    if winreg is None:
+        return False
     try:
-        import winreg  # type: ignore
-
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
             winreg.QueryValueEx(key, APP_NAME)
             return True
