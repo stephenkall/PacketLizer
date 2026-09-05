@@ -48,6 +48,24 @@ jobs:
       - name: Install build dependencies
         run: pip install -r requirements.txt pyinstaller
 
+      # Computed before the build so the tag can be baked into the .exe
+      # itself (packetlizer/_build_tag.py) -- that's what lets a running
+      # build compare its own version against the latest GitHub release.
+      - name: Compute version tag
+        id: ver
+        shell: bash
+        run: |
+          BASE=$(python -c "import packetlizer; print(packetlizer.__version__)")
+          TAG="v${BASE}.${GITHUB_RUN_NUMBER}"
+          echo "tag=$TAG"                     >> "$GITHUB_OUTPUT"
+          echo "asset=PacketLizer-${TAG}.exe" >> "$GITHUB_OUTPUT"
+
+      - name: Embed build tag
+        shell: bash
+        run: |
+          echo 'BUILD_TAG: str | None = "${{ steps.ver.outputs.tag }}"' > packetlizer/_build_tag.py
+          cat packetlizer/_build_tag.py
+
       - name: Build executable
         run: python build_exe.py
 
@@ -55,21 +73,35 @@ jobs:
         shell: bash
         run: ./dist/PacketLizer.exe --config
 
-      - name: Compute version tag
-        id: ver
-        shell: bash
-        run: |
-          BASE=$(python -c "import packetlizer; print(packetlizer.__version__)")
-          TAG="v${BASE}.${GITHUB_RUN_NUMBER}"
-          echo "tag=$TAG"                          >> "$GITHUB_OUTPUT"
-          echo "asset=PacketLizer-${TAG}.exe"      >> "$GITHUB_OUTPUT"
-
       - name: Package binary
         shell: bash
         run: |
           mkdir -p release
           cp dist/PacketLizer.exe "release/${{ steps.ver.outputs.asset }}"
           ls -la release
+
+      # Release notes = the subject lines of every commit since the previous
+      # tag, so they read like real changelog entries instead of a canned
+      # "automated build" message.
+      - name: Build release notes from commit history
+        id: notes
+        shell: bash
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          {
+            echo "notes<<NOTES_EOF"
+            echo "Changes since ${PREV_TAG:-the first release}:"
+            echo
+            if [ -n "$PREV_TAG" ]; then
+              git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:"- %s"
+            else
+              git log --no-merges --pretty=format:"- %s"
+            fi
+            echo
+            echo
+            echo "Tests passed on Python 3.11 and 3.12. Download PacketLizer-*.exe below."
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
         shell: bash
@@ -79,5 +111,5 @@ jobs:
           gh release create "${{ steps.ver.outputs.tag }}" \
             "release/${{ steps.ver.outputs.asset }}" \
             --title "PacketLizer ${{ steps.ver.outputs.tag }}" \
-            --notes "Automated build from commit ${GITHUB_SHA::7}. Tests passed on Python 3.11 and 3.12. Download PacketLizer-*.exe below." \
+            --notes "${{ steps.notes.outputs.notes }}" \
             --latest
