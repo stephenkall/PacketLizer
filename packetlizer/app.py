@@ -273,6 +273,7 @@ class TrayApp:
         else:
             root.after(800, lambda: self._notify(t("notify.running_tray")))
 
+        root.after(4000, self._check_for_update_async)
         self._tick()
         root.mainloop()
         return 0
@@ -422,6 +423,117 @@ class TrayApp:
                 self._notify(t("notify.autostart_on") if want else t("notify.autostart_off"))
         # reflect the real state back into the checkbox
         self._autostart_var.set(self._autostart_enabled())
+
+    # -- auto-update -------------------------------------------------
+    def _check_for_update_async(self):
+        def work():
+            from .updater import check_for_update
+
+            try:
+                info = check_for_update()
+            except Exception:  # pragma: no cover - network edge cases
+                log.exception("Update check failed")
+                return
+            if info and info["tag"] != self.cfg.skip_update_version and self._root:
+                self._root.after(0, lambda: self._show_update_dialog(info))
+
+        threading.Thread(target=work, name="update-check", daemon=True).start()
+
+    def _show_update_dialog(self, info: dict):
+        import tkinter as tk
+        from tkinter import scrolledtext, ttk
+
+        from .updater import current_version
+
+        win = tk.Toplevel(self._root)
+        win.title(t("dlg.update_title"))
+        win.transient(self._root)
+        win.resizable(False, False)
+        pad = {"padx": 12, "pady": 6}
+
+        ttk.Label(
+            win,
+            text=t("dlg.update_available_fmt", current=current_version(), new=info["tag"]),
+            font=("Segoe UI", 10, "bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
+
+        ttk.Label(win, text=t("dlg.update_notes_label")).grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=12)
+        notes = scrolledtext.ScrolledText(win, width=60, height=10, wrap="word")
+        notes.insert("1.0", info.get("notes") or t("dlg.update_no_notes"))
+        notes.config(state="disabled")
+        notes.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=12, pady=(2, 6))
+
+        skip_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(win, text=t("dlg.update_chk_skip"), variable=skip_var).grid(
+            row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 6))
+
+        status_var = tk.StringVar(value="")
+        ttk.Label(win, textvariable=status_var, foreground="#6b7280").grid(
+            row=4, column=0, columnspan=2, sticky="w", padx=12)
+
+        def remember_skip_if_checked():
+            if skip_var.get():
+                self.cfg.skip_update_version = info["tag"]
+                try:
+                    self.cfg.save()
+                except OSError:
+                    pass
+
+        def do_later():
+            remember_skip_if_checked()
+            win.destroy()
+
+        def do_update():
+            remember_skip_if_checked()
+            update_btn.config(state="disabled")
+            later_btn.config(state="disabled")
+            status_var.set(t("dlg.update_downloading", pct=0))
+
+            def on_progress(written, total):
+                pct = int(written * 100 / total) if total else 0
+                win.after(0, lambda: status_var.set(t("dlg.update_downloading", pct=pct)))
+
+            def work():
+                from .updater import download_and_apply
+
+                try:
+                    download_and_apply(info["asset_url"], on_progress=on_progress)
+                except SystemExit:
+                    win.after(0, self._on_quit_for_update)
+                except Exception as e:  # pragma: no cover - network/filesystem edge cases
+                    log.exception("Auto-update failed")
+                    win.after(0, lambda: status_var.set(t("dlg.update_failed", err=e)))
+                    win.after(0, lambda: (update_btn.config(state="normal"), later_btn.config(state="normal")))
+
+            threading.Thread(target=work, name="update-download", daemon=True).start()
+
+        bar = ttk.Frame(win)
+        bar.grid(row=5, column=0, columnspan=2, sticky="ew", padx=12, pady=(4, 10))
+        later_btn = ttk.Button(bar, text=t("dlg.update_btn_later"), command=do_later)
+        later_btn.pack(side="right")
+        update_btn = ttk.Button(bar, text=t("dlg.update_btn_update"), command=do_update)
+        update_btn.pack(side="right", padx=6)
+
+        win.grid_columnconfigure(0, weight=1)
+        win.update_idletasks()
+        win.grab_set()
+        win.focus_force()
+
+    def _on_quit_for_update(self):
+        """Close down cleanly so the helper script can replace + relaunch the exe."""
+        self._notify(t("notify.update_restarting"))
+        self._shutting_down = True
+        self._persist_config_on_exit()
+        self.monitor.request_stop()
+        try:
+            if self._icon:
+                self._icon.visible = False
+                self._icon.stop()
+        except Exception:
+            pass
+        if self._root:
+            self._root.after(300, self._root.destroy)
 
     def _read_config_fields(self) -> dict:
         """Read and validate the window fields. Raises ValueError with a localized message."""

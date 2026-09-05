@@ -56,6 +56,9 @@ class Config:
     prefer_raw_icmp: bool = True
     # UI language code: "auto" (detect from the OS), "en", "pt_BR".
     language: str = "auto"
+    # Release tag the user chose "don't remind me again" for (e.g. "v1.0.0.42").
+    # Empty = always offer whatever is newer than the running build.
+    skip_update_version: str = ""
 
     _source_path: Path = field(default=None, repr=False, compare=False)
     _created: bool = field(default=False, repr=False, compare=False)

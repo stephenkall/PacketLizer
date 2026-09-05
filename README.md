@@ -61,6 +61,11 @@ stays around ~45 MB.
 | `python main.py --uninstall-autostart` | Disable start-with-Windows |
 | `python main.py --config` | Print the effective configuration and paths |
 
+Autostart never requires administrator rights: it prefers the per-user
+registry key (`HKCU\...\Run`), but if that write is blocked (e.g. a locked-down
+machine where you aren't a local admin), it automatically falls back to
+dropping a shortcut in the per-user Startup folder instead of failing.
+
 ### Main window
 
 The icon sits in the tray. While the window is open it **appears in the
@@ -198,7 +203,21 @@ pytest -q
 * **`release`** — on every push to `main` that passes `test`, builds
   `PacketLizer.exe` on Windows, smoke-tests it (`--config`), and publishes a
   **GitHub Release** tagged `v<__version__>.<run number>` with the versioned
-  `.exe` attached and marked as *latest*.
+  `.exe` attached, release notes built from the commit log since the previous
+  tag, and marked as *latest*. The tag is baked into the `.exe` itself
+  (`packetlizer/_build_tag.py`, written by the workflow right before the
+  build) so a running build knows its own version.
 
 Bump `packetlizer.__version__` in `packetlizer/__init__.py` when you want the
 `X.Y.Z` part of the release tag to change.
+
+### Auto-update
+
+The packaged `.exe` checks `github.com/stephenkall/PacketLizer/releases/latest`
+a few seconds after startup. If a newer tag is published, a dialog shows the
+release notes and offers **Update now** / **Later**, with a **"Don't remind me
+again for this version"** checkbox (saved to `config.json` as
+`skip_update_version`). Accepting downloads the new `.exe` and hands off to a
+small helper script that waits for the app to close, replaces the binary, and
+relaunches it. Running from source (`python main.py`) never triggers this —
+there is no packaged build tag to compare against.
