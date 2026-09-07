@@ -209,11 +209,14 @@ class TrayApp:
         ifaces.columnconfigure(0, weight=1)
         self._lf_interfaces = ifaces
         self._iface_hint = ttk.Label(ifaces, text="", foreground="#6b7280", wraplength=540, justify="left")
-        self._iface_hint.grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 2))
+        self._iface_hint.grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 2))
         self._iface_listbox = tk.Listbox(ifaces, selectmode="multiple", exportselection=False, height=4)
-        self._iface_listbox.grid(row=1, column=0, sticky="ew", padx=(8, 4), pady=(0, 6))
+        self._iface_listbox.grid(row=1, column=0, sticky="nsew", padx=(8, 0), pady=(0, 6))
+        self._iface_scroll = ttk.Scrollbar(ifaces, orient="vertical", command=self._iface_listbox.yview)
+        self._iface_scroll.grid(row=1, column=1, sticky="ns", pady=(0, 6))
+        self._iface_listbox.config(yscrollcommand=self._iface_scroll.set)
         self._iface_refresh_btn = ttk.Button(ifaces, text="", command=self._on_refresh_interfaces)
-        self._iface_refresh_btn.grid(row=1, column=1, sticky="n", padx=(0, 8), pady=(0, 6))
+        self._iface_refresh_btn.grid(row=1, column=2, sticky="n", padx=(4, 8), pady=(0, 6))
         self._iface_names: list[str] = []
         self._populate_interfaces_listbox()
 
