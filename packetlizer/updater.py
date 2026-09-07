@@ -126,17 +126,27 @@ def download_and_apply(asset_url: str, on_progress: Callable[[int, int], None] |
 def _spawn_replace_and_relaunch(current_exe: Path, new_exe: Path) -> None:
     """Write a tiny helper .bat that waits for ``current_exe``'s process to
     exit (it can't overwrite itself while running), swaps in the downloaded
-    build, relaunches it, and deletes itself."""
+    build, relaunches it, and deletes itself.
+
+    The caller (app.py's ``_on_quit_for_update``) hard-exits the process
+    shortly after spawning this, so the wait below is normally very brief --
+    but it's bounded (~60s) regardless, so a stuck process can never leave
+    this running forever instead of at least attempting the swap.
+    """
     bat_path = Path(tempfile.gettempdir()) / "packetlizer_update.bat"
     bat_path.write_text(
         "@echo off\r\n"
         "setlocal\r\n"
+        "set tries=0\r\n"
         ":wait\r\n"
         f'tasklist /FI "IMAGENAME eq {current_exe.name}" 2>NUL | find /I "{current_exe.name}" >NUL\r\n'
         "if not errorlevel 1 (\r\n"
+        "  set /a tries+=1\r\n"
+        "  if %tries% GEQ 60 goto swap\r\n"
         "  timeout /t 1 /nobreak >NUL\r\n"
         "  goto wait\r\n"
         ")\r\n"
+        ":swap\r\n"
         f'copy /Y "{new_exe}" "{current_exe}" >NUL\r\n'
         f'del "{new_exe}" >NUL 2>&1\r\n'
         f'start "" "{current_exe}"\r\n'

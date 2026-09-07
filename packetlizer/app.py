@@ -492,17 +492,30 @@ class TrayApp:
         self._iface_status_lbl.grid()
 
     # -- auto-update -------------------------------------------------
-    def _check_for_update_async(self):
+    # Recheck periodically too, not just once at startup, so a copy left
+    # running for days in the tray still gets offered a newer release.
+    _UPDATE_RECHECK_MS = 6 * 3600 * 1000  # 6 hours
+
+    def _check_for_update_async(self, *, reschedule: bool = True):
         def work():
             from .updater import check_for_update
 
+            info = None
             try:
                 info = check_for_update()
             except Exception:  # pragma: no cover - network edge cases
                 log.exception("Update check failed")
-                return
-            if info and info["tag"] != self.cfg.skip_update_version and self._root:
-                self._root.after(0, lambda: self._show_update_dialog(info))
+
+            # Hand off to the Tk thread for everything from here on -- calling
+            # .after()/showing widgets from a background thread isn't safe.
+            def on_tk_thread():
+                if info and info["tag"] != self.cfg.skip_update_version:
+                    self._show_update_dialog(info)
+                if reschedule and self._root and not self._shutting_down:
+                    self._root.after(self._UPDATE_RECHECK_MS, self._check_for_update_async)
+
+            if self._root:
+                self._root.after(0, on_tk_thread)
 
         threading.Thread(target=work, name="update-check", daemon=True).start()
 
@@ -551,15 +564,30 @@ class TrayApp:
             remember_skip_if_checked()
             win.destroy()
 
+        def _update_win_widget(fn):
+            """Best-effort UI update: the dialog may have been closed (its
+            native [X] still works despite grab_set) while a download was in
+            flight. That must never take down the callback that actually
+            applies the update -- see do_update() below, which never routes
+            through here for that part."""
+            try:
+                fn()
+            except Exception:
+                pass
+
         def do_update():
             remember_skip_if_checked()
             update_btn.config(state="disabled")
             later_btn.config(state="disabled")
+            # Block the dialog's own close button while downloading: closing
+            # it must not silently abandon an in-flight update (see below).
+            win.protocol("WM_DELETE_WINDOW", lambda: None)
             status_var.set(t("dlg.update_downloading", pct=0))
 
             def on_progress(written, total):
                 pct = int(written * 100 / total) if total else 0
-                win.after(0, lambda: status_var.set(t("dlg.update_downloading", pct=pct)))
+                self._root.after(0, lambda: _update_win_widget(
+                    lambda: status_var.set(t("dlg.update_downloading", pct=pct))))
 
             def work():
                 from .updater import download_and_apply
@@ -567,14 +595,20 @@ class TrayApp:
                 try:
                     download_and_apply(info["asset_url"], on_progress=on_progress)
                 except SystemExit:
-                    win.after(0, self._on_quit_for_update)
+                    # Scheduled on self._root (not win): this is the step that
+                    # actually stops the app so the helper script can replace
+                    # the .exe and relaunch it, so it must run even if the
+                    # dialog itself is already gone.
+                    self._root.after(0, self._on_quit_for_update)
                 except Exception as e:  # pragma: no cover - network/filesystem edge cases
                     log.exception("Auto-update failed")
                     # "as e" is cleared when the except block exits, so capture the
                     # message now -- the lambda below only runs later, on the Tk loop.
                     err_msg = str(e)
-                    win.after(0, lambda: status_var.set(t("dlg.update_failed", err=err_msg)))
-                    win.after(0, lambda: (update_btn.config(state="normal"), later_btn.config(state="normal")))
+                    self._root.after(0, lambda: _update_win_widget(
+                        lambda: status_var.set(t("dlg.update_failed", err=err_msg))))
+                    self._root.after(0, lambda: _update_win_widget(
+                        lambda: (update_btn.config(state="normal"), later_btn.config(state="normal"))))
 
             threading.Thread(target=work, name="update-download", daemon=True).start()
 
@@ -588,14 +622,30 @@ class TrayApp:
         win.grid_columnconfigure(0, weight=1)
         win.update_idletasks()
         win.grab_set()
+        # Force it to the front even if the main window is currently withdrawn
+        # to the tray -- otherwise a background check's dialog can go unnoticed.
+        win.deiconify()
+        win.lift()
+        win.attributes("-topmost", True)
+        win.after(300, lambda: _update_win_widget(lambda: win.attributes("-topmost", False)))
         win.focus_force()
 
     def _on_quit_for_update(self):
-        """Close down cleanly so the helper script can replace + relaunch the exe."""
+        """Close down so the helper script can replace + relaunch the exe.
+
+        The helper script polls for this process to disappear before it dares
+        touch the .exe on disk, so this process must actually terminate --
+        not just hide its window. Tk teardown + daemon threads normally get
+        there on their own, but a stuck pystray icon thread or similar has
+        been seen to linger, silently leaving the download applied nowhere
+        and the old build still running. os._exit() shortly after is a hard
+        guarantee, given a brief head start to shut down cleanly first.
+        """
         self._notify(t("notify.update_restarting"))
         self._shutting_down = True
         self._persist_config_on_exit()
         self.group.request_stop()
+        self.group.join(timeout=1.5)
         try:
             if self._icon:
                 self._icon.visible = False
@@ -604,6 +654,9 @@ class TrayApp:
             pass
         if self._root:
             self._root.after(300, self._root.destroy)
+            self._root.after(800, lambda: os._exit(0))
+        else:
+            os._exit(0)
 
     def _read_config_fields(self) -> dict:
         """Read and validate the window fields. Raises ValueError with a localized message."""
