@@ -248,10 +248,16 @@ Bump `packetlizer.__version__` in `packetlizer/__init__.py` when you want the
 ### Auto-update
 
 The packaged `.exe` checks `github.com/stephenkall/PacketLizer/releases/latest`
-a few seconds after startup. If a newer tag is published, a dialog shows the
-release notes and offers **Update now** / **Later**, with a **"Don't remind me
-again for this version"** checkbox (saved to `config.json` as
-`skip_update_version`). Accepting downloads the new `.exe` and hands off to a
-small helper script that waits for the app to close, replaces the binary, and
-relaunches it. Running from source (`python main.py`) never triggers this —
-there is no packaged build tag to compare against.
+a few seconds after startup, and then again every 6 hours for as long as it
+keeps running — so a copy left open for days in the tray still gets offered a
+newer release, not just at the next launch. If a newer tag is published, a
+dialog shows the release notes and offers **Update now** / **Later**, with a
+**"Don't remind me again for this version"** checkbox (saved to
+`config.json` as `skip_update_version`). The dialog forces itself to the
+front (even while the main window is hidden to the tray) so a background
+check doesn't go unnoticed. Accepting downloads the new `.exe` and hands off
+to a small helper script that waits for the app to close, replaces the
+binary, and relaunches it — the app then hard-exits shortly after handing
+off, so a lingering thread can't silently leave the download applied nowhere.
+Running from source (`python main.py`) never triggers this — there is no
+packaged build tag to compare against.
