@@ -39,9 +39,11 @@ dist\PacketLizer.exe
 ```
 
 `build_exe.py` bundles only what PacketLizer needs (pystray, Pillow, icmplib,
-matplotlib + numpy, reportlab, plus the stdlib) and explicitly excludes heavy
-unrelated packages that might be installed in your dev environment, so the `.exe`
-stays around ~45 MB.
+matplotlib + numpy, reportlab, psutil, plus the stdlib) and explicitly excludes
+heavy unrelated packages that might be installed in your dev environment. It
+builds in two steps: first the small, dependency-free auto-update helper
+(`PacketLizerUpdater.exe`, see [Auto-update](#auto-update)), then the main
+`PacketLizer.exe` with that helper embedded inside it via `--add-binary`.
 
 ## Usage
 
@@ -253,11 +255,16 @@ keeps running — so a copy left open for days in the tray still gets offered a
 newer release, not just at the next launch. If a newer tag is published, a
 dialog shows the release notes and offers **Update now** / **Later**, with a
 **"Don't remind me again for this version"** checkbox (saved to
-`config.json` as `skip_update_version`). The dialog forces itself to the
-front (even while the main window is hidden to the tray) so a background
-check doesn't go unnoticed. Accepting downloads the new `.exe` and hands off
-to a small helper script that waits for the app to close, replaces the
-binary, and relaunches it — the app then hard-exits shortly after handing
-off, so a lingering thread can't silently leave the download applied nowhere.
-Running from source (`python main.py`) never triggers this — there is no
-packaged build tag to compare against.
+`config.json` as `skip_update_version`). The dialog is a fully independent
+window (not tied to the main one, which is normally withdrawn to the tray)
+and forces itself to the front, so a background check doesn't go unnoticed.
+
+Accepting downloads the new `.exe`, then hands off to **`PacketLizerUpdater.exe`**
+— a small standalone helper bundled *inside* the main `.exe` itself (you only
+ever download one file; the app extracts its own helper at update time). The
+helper waits on the exact running process ID via the Win32 API (not a
+name-based `tasklist` guess), replaces the binary once it's confirmed gone,
+and relaunches it — while the main app hard-exits shortly after handing off,
+so nothing can be left half-applied. Running from source (`python main.py`)
+never triggers any of this — there is no packaged build tag to compare
+against, and no helper to extract.
