@@ -17,7 +17,7 @@ from pathlib import Path
 from .analytics import Report, analyze, humanize_seconds
 from .config import STATUS_LABEL, Config
 from .i18n import current_language, t
-from .storage import Storage
+from .storage import ALL, Storage
 
 log = logging.getLogger("packetlizer.report")
 
@@ -223,9 +223,9 @@ def _html_section(rep: Report, chart_png: bytes, idx: int) -> str:
   </section>"""
 
 
-def render_html(sections: list[tuple[Report, bytes]], first_ts, last_ts) -> str:
-    gen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    total_all = sum(rep.total for rep, _ in sections)
+def _sections_body(sections: list[tuple[Report, bytes]]) -> str:
+    """Target nav (when >1 target) + one block per target -- the content of a
+    single tab (or of the whole page, when there's only one interface)."""
     if len(sections) > 1:
         nav = (f'<p class="nav">{t("rpt.multi_intro_fmt", n=len(sections))}</p>'
                '<ul class="nav">%s</ul>') % "".join(
@@ -235,7 +235,52 @@ def render_html(sections: list[tuple[Report, bytes]], first_ts, last_ts) -> str:
     else:
         nav = ""
     body = "\n".join(_html_section(rep, png, i) for i, (rep, png) in enumerate(sections))
-    sentinel = sections[0][0].timeout_sentinel_ms
+    return nav + "\n" + body
+
+
+def render_html(tabs: list[tuple[str | None, list[tuple[Report, bytes]]]], first_ts, last_ts) -> str:
+    """``tabs``: one ``(interface_label, sections)`` per interface. A single
+    tab whose label is ``None`` (no interface split -- the common case) is
+    rendered exactly as a plain report, with no tab bar at all. Two or more
+    tabs get a small button row that toggles which panel is visible."""
+    gen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total_all = sum(rep.total for _, sections in tabs for rep, _ in sections)
+    sentinel = tabs[0][1][0][0].timeout_sentinel_ms
+
+    def _tab_button(i: int, label: str) -> str:
+        cls = "tab-btn active" if i == 0 else "tab-btn"
+        selected = ' aria-selected="true"' if i == 0 else ""
+        return f'<button class="{cls}" data-panel="iface-panel-{i}"{selected}>{label}</button>'
+
+    def _iface_panel(i: int, sections: list[tuple[Report, bytes]]) -> str:
+        hidden = "" if i == 0 else " hidden"
+        return f'<div class="iface-panel" id="iface-panel-{i}"{hidden}>{_sections_body(sections)}</div>'
+
+    if len(tabs) <= 1:
+        tabbar = ""
+        panels = _sections_body(tabs[0][1]) if tabs else ""
+    else:
+        tabbar = '<div class="tabs" role="tablist">%s</div>' % "".join(
+            _tab_button(i, label) for i, (label, _) in enumerate(tabs)
+        )
+        panels = "\n".join(
+            _iface_panel(i, sections) for i, (_, sections) in enumerate(tabs)
+        )
+
+    script = """
+<script>
+document.querySelectorAll('.tab-btn').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    document.querySelectorAll('.tab-btn').forEach(function (b) {
+      b.classList.remove('active'); b.removeAttribute('aria-selected');
+    });
+    document.querySelectorAll('.iface-panel').forEach(function (p) { p.hidden = true; });
+    btn.classList.add('active'); btn.setAttribute('aria-selected', 'true');
+    document.getElementById(btn.dataset.panel).hidden = false;
+  });
+});
+</script>""" if len(tabs) > 1 else ""
+
     return f"""<!doctype html>
 <html lang="{current_language().replace('_', '-').lower()}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -248,6 +293,11 @@ def render_html(sections: list[tuple[Report, bytes]], first_ts, last_ts) -> str:
  header p {{ margin:4px 0 0; opacity:.8; font-size:13px; }}
  main {{ max-width:1160px; margin:0 auto; padding:24px 28px 60px; }}
  .nav {{ font-size:13px; }} .nav a {{ color:#2563eb; }}
+ .tabs {{ display:flex; gap:6px; margin:20px 0 4px; border-bottom:1px solid #e5e7eb; flex-wrap:wrap; }}
+ .tab-btn {{ font:inherit; font-size:13px; font-weight:600; padding:9px 16px; border:0;
+   background:transparent; color:#6b7280; cursor:pointer; border-bottom:2px solid transparent; }}
+ .tab-btn:hover {{ color:#111; }}
+ .tab-btn.active {{ color:#2563eb; border-bottom-color:#2563eb; }}
  .target-block {{ border-top:3px solid #0f172a; margin-top:34px; padding-top:6px; }}
  .target-block:first-of-type {{ border-top:0; margin-top:10px; }}
  .sub {{ color:#6b7280; font-size:13px; margin:2px 0 16px; }}
@@ -268,6 +318,7 @@ def render_html(sections: list[tuple[Report, bytes]], first_ts, last_ts) -> str:
    th {{ background:#0f172a; }} td, th {{ border-color:#1f2937; }}
    .card .k, .card .s, .sub {{ color:#9ca3af; }}
    .target-block {{ border-color:#334155; }}
+   .tabs {{ border-color:#334155; }} .tab-btn {{ color:#9ca3af; }} .tab-btn:hover {{ color:#e5e7eb; }}
  }}
 </style></head><body>
 <header>
@@ -276,17 +327,20 @@ def render_html(sections: list[tuple[Report, bytes]], first_ts, last_ts) -> str:
      &nbsp;|&nbsp; {t("rpt.total_fmt", n=total_all)} &nbsp;|&nbsp; {t("rpt.generated_fmt", ts=gen)}</p>
 </header>
 <main>
-  {nav}
-{body}
+  {tabbar}
+{panels}
 
   <p style="margin-top:30px;color:#6b7280;font-size:12px">{t("rpt.footer_fmt", ms=sentinel)}</p>
-</main></body></html>"""
+</main>{script}</body></html>"""
 
 
 # ---------------------------------------------------------------------------
 # PDF
 # ---------------------------------------------------------------------------
-def render_pdf(sections: list[tuple[Report, bytes]], first_ts, last_ts, out_path: Path) -> None:
+def render_pdf(tabs: list[tuple[str | None, list[tuple[Report, bytes]]]], first_ts, last_ts,
+              out_path: Path) -> None:
+    """PDF has no notion of interactive tabs, so each interface just becomes
+    its own heading level, one after another (page break in between)."""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
@@ -300,60 +354,77 @@ def render_pdf(sections: list[tuple[Report, bytes]], first_ts, last_ts, out_path
         TableStyle,
     )
     from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.utils import ImageReader
 
+    all_sections = [s for _, secs in tabs for s in secs]
     styles = getSampleStyleSheet()
     story = []
     story.append(Paragraph(t("rpt.header"), styles["Title"]))
-    targets = ", ".join(rep.target for rep, _ in sections)
+    targets = ", ".join(dict.fromkeys(rep.target for rep, _ in all_sections))
     story.append(Paragraph(
         f"{t('rpt.window_fmt', start=_fmt_ts(first_ts), end=_fmt_ts(last_ts))}<br/>"
-        f"{t('rpt.total_fmt', n=sum(r.total for r, _ in sections))}<br/>"
-        f"{t('kpi.outages')} ({len(sections)}): {targets}<br/>"
+        f"{t('rpt.total_fmt', n=sum(r.total for r, _ in all_sections))}<br/>"
+        f"{t('kpi.outages')} ({len(all_sections)}): {targets}<br/>"
         f"{t('rpt.generated_fmt', ts=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}",
         styles["Normal"]))
-    if len(sections) > 1:
+    if len(all_sections) > 1:
         story.append(Paragraph(f"<i>{t('rpt.multi_note')}</i>", styles["Normal"]))
     story.append(Spacer(1, 0.4 * cm))
 
-    for si, (rep, chart_png) in enumerate(sections):
-        if si:
+    first_thing = True
+
+    def _break_before_next() -> None:
+        nonlocal first_thing
+        if not first_thing:
             story.append(PageBreak())
-        story.append(Paragraph(t("rpt.block_target_fmt", target=rep.target), styles["Heading1"]))
-        story.append(Paragraph(
-            t("rpt.block_window_fmt", start=_fmt_ts(rep.first_ts), end=_fmt_ts(rep.last_ts),
-              n=rep.total, interval=rep.interval_seconds),
-            styles["Normal"]))
-        story.append(Spacer(1, 0.3 * cm))
+        first_thing = False
 
-        kpi_tbl = Table([[k, v] for k, v, _ in _kpi_cards(rep)], colWidths=[7 * cm, 9 * cm])
-        kpi_tbl.setStyle(TableStyle([
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f2f4f7")),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ]))
-        story.append(kpi_tbl)
-        story.append(Spacer(1, 0.4 * cm))
+    for iface_label, sections in tabs:
+        just_started_iface = False
+        if iface_label is not None:
+            _break_before_next()
+            story.append(Paragraph(t("rpt.iface_heading_fmt", iface=iface_label), styles["Title"]))
+            just_started_iface = True  # keep the heading and its first target on the same flow
 
-        from reportlab.lib.utils import ImageReader
+        for rep, chart_png in sections:
+            if just_started_iface:
+                just_started_iface = False
+            else:
+                _break_before_next()
+            story.append(Paragraph(t("rpt.block_target_fmt", target=rep.target), styles["Heading1"]))
+            story.append(Paragraph(
+                t("rpt.block_window_fmt", start=_fmt_ts(rep.first_ts), end=_fmt_ts(rep.last_ts),
+                  n=rep.total, interval=rep.interval_seconds),
+                styles["Normal"]))
+            story.append(Spacer(1, 0.3 * cm))
 
-        iw, ih = ImageReader(io.BytesIO(chart_png)).getSize()
-        w = 17 * cm
-        story.append(Image(io.BytesIO(chart_png), width=w, height=w * ih / iw))
-        story.append(Spacer(1, 0.4 * cm))
+            kpi_tbl = Table([[k, v] for k, v, _ in _kpi_cards(rep)], colWidths=[7 * cm, 9 * cm])
+            kpi_tbl.setStyle(TableStyle([
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f2f4f7")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]))
+            story.append(kpi_tbl)
+            story.append(Spacer(1, 0.4 * cm))
 
-        story.append(Paragraph(t("rpt.h_outages_fmt", n=rep.outage_count), styles["Heading2"]))
-        orows = [[t("col.num"), t("col.start"), t("col.duration"), t("col.lost_packets")]]
-        for i, o in enumerate(rep.outages[:60]):
-            orows.append([str(i + 1), o.start_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                          humanize_seconds(o.duration_s), str(o.lost_count)])
-        ot = Table(orows, colWidths=[1.2 * cm, 6 * cm, 4 * cm, 3 * cm])
-        ot.setStyle(TableStyle([
-            ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f2f4f7")),
-        ]))
-        story.append(ot)
+            iw, ih = ImageReader(io.BytesIO(chart_png)).getSize()
+            w = 17 * cm
+            story.append(Image(io.BytesIO(chart_png), width=w, height=w * ih / iw))
+            story.append(Spacer(1, 0.4 * cm))
+
+            story.append(Paragraph(t("rpt.h_outages_fmt", n=rep.outage_count), styles["Heading2"]))
+            orows = [[t("col.num"), t("col.start"), t("col.duration"), t("col.lost_packets")]]
+            for i, o in enumerate(rep.outages[:60]):
+                orows.append([str(i + 1), o.start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                              humanize_seconds(o.duration_s), str(o.lost_count)])
+            ot = Table(orows, colWidths=[1.2 * cm, 6 * cm, 4 * cm, 3 * cm])
+            ot.setStyle(TableStyle([
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f2f4f7")),
+            ]))
+            story.append(ot)
 
     SimpleDocTemplate(str(out_path), pagesize=A4,
                       leftMargin=2 * cm, rightMargin=2 * cm,
@@ -370,10 +441,12 @@ def export_csv(cfg: Config, out_path: Path, *, days=None, since=None, until=None
     n = 0
     with Storage(cfg.resolved_db_path()) as st, out_path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["timestamp_iso", "timestamp_epoch", "target", "rtt_ms", "status_code", "status"])
+        w.writerow(["timestamp_iso", "timestamp_epoch", "target", "interface",
+                    "rtt_ms", "status_code", "status"])
         for s in st.iter_samples(start, end):
             iso = datetime.fromtimestamp(s.ts).isoformat()
-            w.writerow([iso, s.ts, s.target or "", "" if s.rtt_ms is None else f"{s.rtt_ms:.3f}",
+            w.writerow([iso, s.ts, s.target or "", s.iface or "",
+                        "" if s.rtt_ms is None else f"{s.rtt_ms:.3f}",
                         s.status, STATUS_LABEL.get(s.status, str(s.status))])
             n += 1
     return n
@@ -406,18 +479,23 @@ def _load_report(cfg: Config, start, end):
     return rep, chart_src
 
 
-def _load_reports(cfg: Config, start, end) -> list[tuple[Report, list]]:
-    """One Report per distinct target present in the range, oldest first."""
+def _load_reports(cfg: Config, start, end, iface=ALL) -> list[tuple[Report, list]]:
+    """One Report per distinct target present in the range, oldest first.
+
+    ``iface`` narrows to samples taken over one specific network interface
+    (or ``None`` for the pre-multi-interface, unbound samples); the default
+    ``ALL`` doesn't filter by interface at all.
+    """
     st = Storage(cfg.resolved_db_path())
     try:
         interval = float(st.get_meta("interval_seconds", str(cfg.interval_seconds)))
         sentinel = float(st.get_meta("timeout_ms")
                          or st.get_meta("timeout_sentinel_ms")
                          or cfg.timeout_ms)
-        targets = st.distinct_targets(start, end)
+        targets = st.distinct_targets(start, end, iface=iface)
         out: list[tuple[Report, list]] = []
         for tgt in targets:
-            samples = list(st.iter_samples(start, end, target=tgt))
+            samples = list(st.iter_samples(start, end, target=tgt, iface=iface))
             if not samples:
                 continue
             rep = analyze(
@@ -434,29 +512,59 @@ def _load_reports(cfg: Config, start, end) -> list[tuple[Report, list]]:
     return out
 
 
+def _load_tabs(cfg: Config, start, end) -> list[tuple[str | None, list[tuple[Report, list]]]]:
+    """One tab per network interface present in the range.
+
+    When the data was never split by interface (0 or 1 distinct ``iface``
+    value -- the common case for anyone not using the multi-interface
+    feature), returns a single tab labeled ``None``, which ``render_html``
+    /``render_pdf`` render with no tab chrome at all: identical output to
+    before this feature existed.
+    """
+    st = Storage(cfg.resolved_db_path())
+    try:
+        ifaces = st.distinct_interfaces(start, end)
+    finally:
+        st.close()
+
+    if len(ifaces) <= 1:
+        return [(None, _load_reports(cfg, start, end))]
+
+    tabs: list[tuple[str | None, list[tuple[Report, list]]]] = []
+    for ifc in ifaces:
+        reports = _load_reports(cfg, start, end, iface=ifc)
+        if reports:
+            tabs.append((ifc or t("rpt.unbound_iface"), reports))
+    return tabs
+
+
 def generate_reports(cfg: Config, *, out_dir: Path, fmt: str = "both",
                      days=None, since=None, until=None) -> list[Path]:
     start, end = _resolve_window(days, since, until)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    reports = _load_reports(cfg, start, end)
-    if not reports:
+    tabs = [(label, reports) for label, reports in _load_tabs(cfg, start, end) if reports]
+    if not tabs:
         raise SystemExit(t("rpt.no_samples"))
-    sections = [(rep, build_chart_png(rep, src)) for rep, src in reports]
-    first_ts = min(rep.first_ts for rep, _ in reports)
-    last_ts = max(rep.last_ts for rep, _ in reports)
+    sections_by_tab = [
+        (label, [(rep, build_chart_png(rep, src)) for rep, src in reports])
+        for label, reports in tabs
+    ]
+    all_reports = [rc for _, reports in tabs for rc in reports]
+    first_ts = min(rep.first_ts for rep, _ in all_reports)
+    last_ts = max(rep.last_ts for rep, _ in all_reports)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = out_dir / f"packetlizer_report_{stamp}"
     made: list[Path] = []
     if fmt in ("html", "both"):
         p = base.with_suffix(".html")
-        p.write_text(render_html(sections, first_ts, last_ts), encoding="utf-8")
+        p.write_text(render_html(sections_by_tab, first_ts, last_ts), encoding="utf-8")
         made.append(p)
     if fmt in ("pdf", "both"):
         p = base.with_suffix(".pdf")
-        render_pdf(sections, first_ts, last_ts, p)
+        render_pdf(sections_by_tab, first_ts, last_ts, p)
         made.append(p)
-    # the verbose CSV (with a 'target' column) always accompanies the report
+    # the verbose CSV (with 'target' and 'interface' columns) always accompanies the report
     csv_path = base.with_suffix(".csv")
     export_csv(cfg, csv_path, days=days, since=since, until=until)
     made.append(csv_path)

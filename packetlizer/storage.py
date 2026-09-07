@@ -1,12 +1,15 @@
 """Compact SQLite storage for the samples.
 
 Schema (one row per probe):
-    samples(ts INTEGER, rtt_ms REAL NULL, status INTEGER, target TEXT)
+    samples(ts INTEGER, rtt_ms REAL NULL, status INTEGER, target TEXT, iface TEXT)
     meta(key TEXT PRIMARY KEY, value TEXT)
 
 Every sample stores the target (domain/IP) it was probed against, so the report
-can split the data per target even after the user changes the target. ~1
-sample/s takes on the order of a few MB per day; retention (config) deletes old
+can split the data per target even after the user changes the target. It also
+stores the network interface it was sent over (``iface``, e.g. "Wi-Fi"), NULL
+when the user hasn't selected specific adapters -- this lets the report build
+one tab per interface when several are monitored in parallel. ~1 sample/s
+takes on the order of a few MB per day; retention (config) deletes old
 history and VACUUM reclaims the space.
 """
 from __future__ import annotations
@@ -24,7 +27,8 @@ CREATE TABLE IF NOT EXISTS samples (
     ts     INTEGER NOT NULL,
     rtt_ms REAL,
     status INTEGER NOT NULL,
-    target TEXT
+    target TEXT,
+    iface  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples(ts);
 CREATE TABLE IF NOT EXISTS meta (
@@ -33,7 +37,8 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 """
 
-_ALL = object()  # sentinel: "no target filter" (distinct from target=None)
+_ALL = object()  # sentinel: "no filter" (distinct from target=None / iface=None)
+ALL = _ALL  # public alias for callers outside this module (e.g. report.py)
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,7 @@ class Sample:
     rtt_ms: float | None
     status: int
     target: str | None = None
+    iface: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -71,23 +77,30 @@ class Storage:
                 self._conn.execute(
                     "UPDATE samples SET target = ? WHERE target IS NULL", (row[0],)
                 )
+        if "iface" not in cols:
+            # Older history predates per-interface probing: leave it NULL, which
+            # is exactly what "not bound to a specific adapter" means anyway.
+            self._conn.execute("ALTER TABLE samples ADD COLUMN iface TEXT")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_samples_target_ts ON samples(target, ts)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_iface_ts ON samples(iface, ts)"
         )
         self._conn.commit()
 
     # -- write -----------------------------------------------------------
     def add(self, rtt_ms: float | None, status: int, ts: int | None = None,
-            target: str | None = None) -> None:
+            target: str | None = None, iface: str | None = None) -> None:
         self._conn.execute(
-            "INSERT INTO samples(ts, rtt_ms, status, target) VALUES (?, ?, ?, ?)",
-            (int(ts if ts is not None else time.time()), rtt_ms, int(status), target),
+            "INSERT INTO samples(ts, rtt_ms, status, target, iface) VALUES (?, ?, ?, ?, ?)",
+            (int(ts if ts is not None else time.time()), rtt_ms, int(status), target, iface),
         )
 
     def add_many(self, rows: Iterable[tuple]) -> None:
-        norm = [tuple(r) + (None,) * (4 - len(r)) for r in rows]
+        norm = [tuple(r) + (None,) * (5 - len(r)) for r in rows]
         self._conn.executemany(
-            "INSERT INTO samples(ts, rtt_ms, status, target) VALUES (?, ?, ?, ?)", norm
+            "INSERT INTO samples(ts, rtt_ms, status, target, iface) VALUES (?, ?, ?, ?, ?)", norm
         )
 
     def commit(self) -> None:
@@ -114,10 +127,27 @@ class Storage:
         row = self._conn.execute("SELECT MIN(ts), MAX(ts) FROM samples").fetchone()
         return (row[0], row[1]) if row else (None, None)
 
-    def distinct_targets(self, start: int | None = None, end: int | None = None) -> list[str | None]:
-        """Targets present in the range, oldest first (by their first sample)."""
+    def distinct_targets(self, start: int | None = None, end: int | None = None, iface=_ALL) -> list[str | None]:
+        """Targets present in the range (optionally within one interface), oldest first."""
         sql, params = self._range_sql("SELECT target, MIN(ts) AS m FROM samples", start, end)
+        if iface is not _ALL:
+            joiner = " AND " if " WHERE " in sql else " WHERE "
+            if iface is None:
+                sql += joiner + "iface IS NULL"
+            else:
+                sql += joiner + "iface = ?"
+                params.append(iface)
         sql += " GROUP BY target ORDER BY m ASC"
+        return [r[0] for r in self._conn.execute(sql, params)]
+
+    def distinct_interfaces(self, start: int | None = None, end: int | None = None) -> list[str | None]:
+        """Interfaces present in the range, oldest first (by their first sample).
+
+        A NULL entry means samples taken without a specific adapter bound
+        (the pre-multi-interface default probe).
+        """
+        sql, params = self._range_sql("SELECT iface, MIN(ts) AS m FROM samples", start, end)
+        sql += " GROUP BY iface ORDER BY m ASC"
         return [r[0] for r in self._conn.execute(sql, params)]
 
     def iter_samples(
@@ -125,26 +155,34 @@ class Storage:
         start: int | None = None,
         end: int | None = None,
         target=_ALL,
+        iface=_ALL,
         batch: int = 5000,
     ) -> Iterator[Sample]:
         sql, params = self._range_sql(
-            "SELECT ts, rtt_ms, status, target FROM samples", start, end
+            "SELECT ts, rtt_ms, status, target, iface FROM samples", start, end
         )
-        if target is not _ALL:
+
+        def _add_eq(col: str, value) -> None:
+            nonlocal sql
             joiner = " AND " if " WHERE " in sql else " WHERE "
-            if target is None:
-                sql += joiner + "target IS NULL"
+            if value is None:
+                sql += f"{joiner}{col} IS NULL"
             else:
-                sql += joiner + "target = ?"
-                params.append(target)
+                sql += f"{joiner}{col} = ?"
+                params.append(value)
+
+        if target is not _ALL:
+            _add_eq("target", target)
+        if iface is not _ALL:
+            _add_eq("iface", iface)
         sql += " ORDER BY ts ASC"
         cur = self._conn.execute(sql, params)
         while True:
             rows = cur.fetchmany(batch)
             if not rows:
                 break
-            for ts, rtt, status, tgt in rows:
-                yield Sample(int(ts), rtt, int(status), tgt)
+            for ts, rtt, status, tgt, ifc in rows:
+                yield Sample(int(ts), rtt, int(status), tgt, ifc)
 
     @staticmethod
     def _range_sql(base: str, start: int | None, end: int | None) -> tuple[str, list]:
@@ -166,10 +204,21 @@ class Storage:
         return cur.rowcount
 
     @staticmethod
-    def _filter_sql(start: int | None, end: int | None, targets) -> tuple[str, list]:
-        """Build a WHERE clause from a ts range and/or a list of targets.
+    def _in_or_null(col: str, values) -> tuple[str, list]:
+        real = [x for x in values if x is not None]
+        subs, params = [], []
+        if real:
+            subs.append("%s IN (%s)" % (col, ",".join("?" * len(real))))
+            params.extend(real)
+        if any(x is None for x in values):
+            subs.append(f"{col} IS NULL")
+        return "(" + " OR ".join(subs) + ")", params
 
-        `targets` may be None/empty (no target filter) or a list of str/None.
+    @classmethod
+    def _filter_sql(cls, start: int | None, end: int | None, targets, ifaces=None) -> tuple[str, list]:
+        """Build a WHERE clause from a ts range and/or lists of targets/interfaces.
+
+        `targets`/`ifaces` may each be None/empty (no filter) or a list of str/None.
         """
         clauses: list[str] = []
         params: list = []
@@ -180,27 +229,27 @@ class Storage:
             clauses.append("ts <= ?")
             params.append(int(end))
         if targets:
-            real = [x for x in targets if x is not None]
-            subs = []
-            if real:
-                subs.append("target IN (%s)" % ",".join("?" * len(real)))
-                params.extend(real)
-            if any(x is None for x in targets):
-                subs.append("target IS NULL")
-            if subs:
-                clauses.append("(" + " OR ".join(subs) + ")")
+            clause, p = cls._in_or_null("target", targets)
+            clauses.append(clause)
+            params.extend(p)
+        if ifaces:
+            clause, p = cls._in_or_null("iface", ifaces)
+            clauses.append(clause)
+            params.extend(p)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return where, params
 
-    def count_samples(self, start: int | None = None, end: int | None = None, targets=None) -> int:
-        where, params = self._filter_sql(start, end, targets)
+    def count_samples(self, start: int | None = None, end: int | None = None,
+                      targets=None, ifaces=None) -> int:
+        where, params = self._filter_sql(start, end, targets, ifaces)
         return int(self._conn.execute("SELECT COUNT(*) FROM samples" + where, params).fetchone()[0])
 
-    def delete_samples(self, start: int | None = None, end: int | None = None, targets=None) -> int:
-        """Delete samples matching a ts range and/or targets. Requires at least one filter."""
-        where, params = self._filter_sql(start, end, targets)
+    def delete_samples(self, start: int | None = None, end: int | None = None,
+                       targets=None, ifaces=None) -> int:
+        """Delete samples matching a ts range and/or targets/interfaces. Requires at least one filter."""
+        where, params = self._filter_sql(start, end, targets, ifaces)
         if not where:
-            raise ValueError("delete_samples needs a date range and/or targets; "
+            raise ValueError("delete_samples needs a date range and/or targets/interfaces; "
                              "use clear_all_samples() to wipe everything")
         cur = self._conn.execute("DELETE FROM samples" + where, params)
         self._conn.commit()

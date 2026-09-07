@@ -4,12 +4,14 @@ from packetlizer import autostart
 
 
 class _FakeWinreg:
-    """Stands in for the stdlib ``winreg`` module on non-Windows CI runners.
+    """Stands in for the stdlib ``winreg`` module.
 
     Tests here never exercise the real registry-fallback path (that's
     monkeypatched separately) -- this only needs to satisfy
     ``is_autostart_enabled``'s ``OpenKey`` probe, acting as if the Run key
-    never has our value set.
+    never has our value set. Always installed (even on a real Windows dev
+    machine that may have a genuine PacketLizer autostart entry already) so
+    these tests never depend on -- or disturb -- actual machine state.
     """
 
     HKEY_CURRENT_USER = object()
@@ -23,8 +25,7 @@ def _fake_windows(monkeypatch, tmp_path):
     monkeypatch.setattr(autostart.sys, "platform", "win32")
     monkeypatch.setattr(autostart, "_repo_root", lambda: tmp_path)
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    if autostart.winreg is None:
-        monkeypatch.setattr(autostart, "winreg", _FakeWinreg())
+    monkeypatch.setattr(autostart, "winreg", _FakeWinreg())
     yield
 
 
