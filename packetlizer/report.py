@@ -247,20 +247,24 @@ def render_html(tabs: list[tuple[str | None, list[tuple[Report, bytes]]]], first
     total_all = sum(rep.total for _, sections in tabs for rep, _ in sections)
     sentinel = tabs[0][1][0][0].timeout_sentinel_ms
 
+    def _tab_button(i: int, label: str) -> str:
+        cls = "tab-btn active" if i == 0 else "tab-btn"
+        selected = ' aria-selected="true"' if i == 0 else ""
+        return f'<button class="{cls}" data-panel="iface-panel-{i}"{selected}>{label}</button>'
+
+    def _iface_panel(i: int, sections: list[tuple[Report, bytes]]) -> str:
+        hidden = "" if i == 0 else " hidden"
+        return f'<div class="iface-panel" id="iface-panel-{i}"{hidden}>{_sections_body(sections)}</div>'
+
     if len(tabs) <= 1:
         tabbar = ""
         panels = _sections_body(tabs[0][1]) if tabs else ""
     else:
         tabbar = '<div class="tabs" role="tablist">%s</div>' % "".join(
-            f'<button class="tab-btn{" active" if i == 0 else ""}" '
-            f'data-panel="iface-panel-{i}"{" aria-selected=\"true\"" if i == 0 else ""}>'
-            f'{label}</button>'
-            for i, (label, _) in enumerate(tabs)
+            _tab_button(i, label) for i, (label, _) in enumerate(tabs)
         )
         panels = "\n".join(
-            f'<div class="iface-panel" id="iface-panel-{i}"{"" if i == 0 else " hidden"}>'
-            f'{_sections_body(sections)}</div>'
-            for i, (label, sections) in enumerate(tabs)
+            _iface_panel(i, sections) for i, (_, sections) in enumerate(tabs)
         )
 
     script = """
