@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,7 @@ log = logging.getLogger("packetlizer.updater")
 
 REPO = "stephenkall/PacketLizer"
 API_LATEST_RELEASE = f"https://api.github.com/repos/{REPO}/releases/latest"
+HELPER_EXE_NAME = "PacketLizerUpdater.exe"
 _TIMEOUT_CHECK = 6
 _TIMEOUT_DOWNLOAD = 30
 
@@ -91,8 +93,9 @@ def check_for_update() -> dict | None:
 
 
 def download_and_apply(asset_url: str, on_progress: Callable[[int, int], None] | None = None) -> None:
-    """Download the new .exe, then hand off to a helper script that waits for
-    this process to exit, replaces the executable, and relaunches it.
+    """Download the new .exe, then hand off to the bundled updater helper,
+    which waits for this exact process to exit, replaces the executable, and
+    relaunches it.
 
     Calls ``sys.exit(0)`` on success so the caller should invoke this from a
     context that can unwind cleanly (e.g. after closing the main window).
@@ -119,42 +122,39 @@ def download_and_apply(asset_url: str, on_progress: Callable[[int, int], None] |
                 if on_progress:
                     on_progress(written, total)
 
-    _spawn_replace_and_relaunch(current_exe, tmp_path)
+    _spawn_updater_helper(current_exe, tmp_path)
     sys.exit(0)
 
 
-def _spawn_replace_and_relaunch(current_exe: Path, new_exe: Path) -> None:
-    """Write a tiny helper .bat that waits for ``current_exe``'s process to
-    exit (it can't overwrite itself while running), swaps in the downloaded
-    build, relaunches it, and deletes itself.
+def _extract_helper_exe() -> Path:
+    """Copy the bundled updater helper out to a stable temp path.
 
-    The caller (app.py's ``_on_quit_for_update``) hard-exits the process
-    shortly after spawning this, so the wait below is normally very brief --
-    but it's bounded (~60s) regardless, so a stuck process can never leave
-    this running forever instead of at least attempting the swap.
+    It ships inside the onefile bundle's extraction dir (``sys._MEIPASS``),
+    which the bootloader tears down as part of *this* process's own exit --
+    the helper must keep running after that, so it needs its own copy of the
+    file that survives independently.
     """
-    bat_path = Path(tempfile.gettempdir()) / "packetlizer_update.bat"
-    bat_path.write_text(
-        "@echo off\r\n"
-        "setlocal\r\n"
-        "set tries=0\r\n"
-        ":wait\r\n"
-        f'tasklist /FI "IMAGENAME eq {current_exe.name}" 2>NUL | find /I "{current_exe.name}" >NUL\r\n'
-        "if not errorlevel 1 (\r\n"
-        "  set /a tries+=1\r\n"
-        "  if %tries% GEQ 60 goto swap\r\n"
-        "  timeout /t 1 /nobreak >NUL\r\n"
-        "  goto wait\r\n"
-        ")\r\n"
-        ":swap\r\n"
-        f'copy /Y "{new_exe}" "{current_exe}" >NUL\r\n'
-        f'del "{new_exe}" >NUL 2>&1\r\n'
-        f'start "" "{current_exe}"\r\n'
-        'del "%~f0"\r\n',
-        encoding="utf-8",
-    )
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        raise RuntimeError("Updater helper is only available in the packaged build.")
+    src = Path(meipass) / HELPER_EXE_NAME
+    if not src.exists():
+        raise RuntimeError(f"Updater helper missing from the bundle: {src}")
+    dst = Path(tempfile.gettempdir()) / HELPER_EXE_NAME
+    shutil.copy2(src, dst)
+    return dst
+
+
+def _spawn_updater_helper(current_exe: Path, new_exe: Path) -> None:
+    """Launch the (now-extracted) helper exe, telling it exactly which PID
+    to wait out and which files are involved. It does the actual swap +
+    relaunch once this process is confirmed gone -- see updater_helper.py."""
+    helper = _extract_helper_exe()
+    kwargs = {}
+    if sys.platform.startswith("win"):
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
     subprocess.Popen(
-        ["cmd", "/c", str(bat_path)],
-        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+        [str(helper), "--pid", str(os.getpid()), "--old", str(current_exe), "--new", str(new_exe)],
         close_fds=True,
+        **kwargs,
     )

@@ -530,7 +530,11 @@ class TrayApp:
 
         win = tk.Toplevel(self._root)
         win.title(t("dlg.update_title"))
-        win.transient(self._root)
+        # Deliberately NOT win.transient(self._root): the main window is
+        # normally withdrawn to the tray, and on Windows a transient/owned
+        # Toplevel tied to a hidden owner can end up not actually visible
+        # (or buried, unfocused) -- exactly the "dialog only shows up once I
+        # open the window" symptom. An independent Toplevel always shows.
         win.resizable(False, False)
         pad = {"padx": 12, "pady": 6}
 

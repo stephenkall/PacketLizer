@@ -71,7 +71,10 @@ jobs:
 
       - name: Smoke-test the executable
         shell: bash
-        run: ./dist/PacketLizer.exe --config
+        run: |
+          test -f dist/PacketLizerUpdater.exe  # the auto-update helper embedded in the main exe
+          ./dist/PacketLizerUpdater.exe --help
+          ./dist/PacketLizer.exe --config
 
       - name: Package binary
         shell: bash
