@@ -53,6 +53,16 @@ def test_config_roundtrip(tmp_path):
     assert again.target == "1.1.1.1"
 
 
+def test_config_roundtrip_interfaces(tmp_path):
+    p = tmp_path / "config.json"
+    cfg = load_config(str(p))
+    assert cfg.interfaces == []
+    cfg.interfaces = ["Wi-Fi", "Ethernet"]
+    cfg.save(p)
+    again = load_config(str(p))
+    assert again.interfaces == ["Wi-Fi", "Ethernet"]
+
+
 def _seed(db, n=200, timeout_ms="2000", target="www.vivo.com.br", base=1_700_000_000,
          lost_range=(50, 60)):
     with Storage(db) as st:
@@ -141,6 +151,44 @@ def test_report_separates_blocks_by_target(tmp_path):
     csv_path = next(p for p in made if p.suffix == ".csv")
     rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
     assert {r["target"] for r in rows} == {"www.vivo.com.br", "1.1.1.1"}
+
+
+def test_report_builds_one_tab_per_interface(tmp_path):
+    db = tmp_path / "multi_iface.db"
+    with Storage(db) as st:
+        st.set_meta("target", "example.test")
+        st.set_meta("interval_seconds", "1.0")
+        st.set_meta("timeout_ms", "2000")
+        base = 1_700_000_000
+        for i in range(50):
+            st.add(20.0, STATUS_OK, base + i, target="example.test", iface="Wi-Fi")
+        for i in range(30):
+            lost = 5 <= i < 8
+            st.add(None if lost else 15.0, STATUS_TIMEOUT if lost else STATUS_OK,
+                  base + i, target="example.test", iface="Ethernet")
+        st.commit()
+    cfg = Config(db_path=str(db))
+
+    made = generate_reports(cfg, out_dir=tmp_path / "out", fmt="both")
+    html = next(p for p in made if p.suffix == ".html").read_text(encoding="utf-8")
+    assert 'class="tabs"' in html
+    assert "Wi-Fi" in html and "Ethernet" in html
+    assert html.count('class="iface-panel"') == 2
+
+    csv_path = next(p for p in made if p.suffix == ".csv")
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+    assert {r["interface"] for r in rows} == {"Wi-Fi", "Ethernet"}
+
+
+def test_report_single_interface_has_no_tab_chrome(tmp_path):
+    """Data with no per-interface split renders exactly like before -- no tab bar."""
+    db = tmp_path / "single_iface.db"
+    _seed(db)
+    cfg = Config(db_path=str(db))
+    made = generate_reports(cfg, out_dir=tmp_path / "out", fmt="html")
+    html = next(p for p in made if p.suffix == ".html").read_text(encoding="utf-8")
+    assert 'class="tabs"' not in html
+    assert 'class="iface-panel"' not in html
 
 
 def test_report_attributes_old_data_to_its_own_target(tmp_path):

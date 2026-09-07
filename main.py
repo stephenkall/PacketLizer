@@ -32,6 +32,7 @@ def _ensure_deps():
             import matplotlib  # noqa: F401
             import reportlab  # noqa: F401
             import tqdm  # noqa: F401
+            import psutil  # noqa: F401
 
             return
         except Exception:
@@ -83,6 +84,21 @@ def _cmd_config(cfg: Config, _args) -> int:
     return 0
 
 
+def _cmd_list_interfaces(_cfg: Config, _args) -> int:
+    from packetlizer.netiface import list_interfaces
+
+    ifaces = list_interfaces()
+    if not ifaces:
+        print("No network interfaces detected (or psutil is unavailable).")
+        return 0
+    for i in ifaces:
+        flags = "up" if i.is_up else "down"
+        if i.usable:
+            flags += ", usable"
+        print(f"{i.name:<30} {i.ipv4 or '-':<16} ({flags})")
+    return 0
+
+
 def _cmd_autostart(cfg: Config, args, enable: bool) -> int:
     from packetlizer.autostart import set_autostart
 
@@ -112,6 +128,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--report", action="store_true", help="Generate a report on demand and exit.")
     g.add_argument("--export-csv", action="store_true", help="Export samples to CSV and exit.")
     g.add_argument("--config", action="store_true", help="Print the effective configuration and exit.")
+    g.add_argument("--list-interfaces", action="store_true",
+                   help="List detected network interfaces (name/IP/status) and exit.")
     g.add_argument("--install-autostart", action="store_true", help="Enable start-with-Windows.")
     g.add_argument("--uninstall-autostart", action="store_true", help="Disable start-with-Windows.")
 
@@ -128,6 +146,8 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--target", help="Domain or IP to probe (e.g. www.vivo.com.br).")
     o.add_argument("--interval", type=float, help="Seconds between pings.")
     o.add_argument("--timeout", type=int, help="Per-ping timeout in ms.")
+    o.add_argument("--interfaces", help="Comma-separated adapter names to probe over in parallel "
+                                        "(see --list-interfaces). Empty = unbound (default route).")
     o.add_argument("--language", choices=available_languages(), help="UI/report language.")
     o.add_argument("--duration", type=int, default=None,
                    help="With --monitor: stop automatically after N seconds (run deadline).")
@@ -141,6 +161,8 @@ def _apply_overrides(cfg: Config, args) -> None:
         cfg.interval_seconds = max(0.2, args.interval)
     if args.timeout:
         cfg.timeout_ms = max(200, args.timeout)
+    if args.interfaces is not None:
+        cfg.interfaces = [n.strip() for n in args.interfaces.split(",") if n.strip()]
     if args.language:
         cfg.language = args.language
 
@@ -153,6 +175,8 @@ def main(argv=None) -> int:
 
     if args.config:
         return _cmd_config(cfg, args)
+    if args.list_interfaces:
+        return _cmd_list_interfaces(cfg, args)
     if args.install_autostart:
         return _cmd_autostart(cfg, args, True)
     if args.uninstall_autostart:

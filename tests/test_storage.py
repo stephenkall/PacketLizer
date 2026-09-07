@@ -18,6 +18,51 @@ def test_target_column_and_distinct_targets(tmp_path):
         assert len(list(st.iter_samples(target="b"))) == 5
 
 
+def test_iface_column_and_distinct_interfaces(tmp_path):
+    with Storage(tmp_path / "i.db") as st:
+        base = 1_700_000_000
+        for i in range(10):
+            st.add(10.0, STATUS_OK, base + i, target="x", iface="Wi-Fi")
+        for i in range(5):
+            st.add(10.0, STATUS_OK, base + 100 + i, target="x", iface="Ethernet")
+        for i in range(3):
+            st.add(10.0, STATUS_OK, base + 200 + i, target="x")  # legacy: no iface
+        st.commit()
+        assert st.distinct_interfaces() == ["Wi-Fi", "Ethernet", None]
+        assert [s.iface for s in st.iter_samples(iface="Wi-Fi")] == ["Wi-Fi"] * 10
+        assert len(list(st.iter_samples(iface="Ethernet"))) == 5
+        assert len(list(st.iter_samples(iface=None))) == 3
+
+
+def test_distinct_targets_filtered_by_iface(tmp_path):
+    with Storage(tmp_path / "i2.db") as st:
+        base = 1_700_000_000
+        st.add(10.0, STATUS_OK, base, target="a", iface="Wi-Fi")
+        st.add(10.0, STATUS_OK, base + 1, target="b", iface="Ethernet")
+        st.commit()
+        assert st.distinct_targets(iface="Wi-Fi") == ["a"]
+        assert st.distinct_targets(iface="Ethernet") == ["b"]
+        assert st.distinct_targets() == ["a", "b"]
+
+
+def test_migration_adds_iface_column_to_legacy_db(tmp_path):
+    db = tmp_path / "legacy_no_iface.db"
+    con = sqlite3.connect(db)
+    con.executescript(
+        "CREATE TABLE samples (ts INTEGER NOT NULL, rtt_ms REAL, status INTEGER NOT NULL, target TEXT);"
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);"
+    )
+    con.executemany("INSERT INTO samples VALUES (?,?,?,?)",
+                    [(1_700_000_000 + i, 12.0, 0, "a") for i in range(5)])
+    con.commit()
+    con.close()
+
+    with Storage(db) as st:
+        assert st.count() == 5
+        assert all(s.iface is None for s in st.iter_samples())
+        assert st.distinct_interfaces() == [None]
+
+
 def test_migration_backfills_target_from_meta(tmp_path):
     db = tmp_path / "legacy.db"
     con = sqlite3.connect(db)
@@ -117,6 +162,20 @@ def test_delete_samples_needs_a_filter(tmp_path):
         _seed_two_targets(st)
         with pytest.raises(ValueError):
             st.delete_samples()
+
+
+def test_delete_samples_by_iface(tmp_path):
+    with Storage(tmp_path / "d.db") as st:
+        base = 1_700_000_000
+        for i in range(10):
+            st.add(10.0, STATUS_OK, base + i, target="x", iface="Wi-Fi")
+        for i in range(7):
+            st.add(10.0, STATUS_OK, base + 100 + i, target="x", iface="Ethernet")
+        st.commit()
+        removed = st.delete_samples(ifaces=["Wi-Fi"])
+        assert removed == 10
+        assert st.count() == 7
+        assert st.distinct_interfaces() == ["Ethernet"]
 
 
 def test_clear_all_samples(tmp_path):

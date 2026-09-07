@@ -59,6 +59,10 @@ class Config:
     # Release tag the user chose "don't remind me again" for (e.g. "v1.0.0.42").
     # Empty = always offer whatever is newer than the running build.
     skip_update_version: str = ""
+    # Network adapter names (psutil-style, e.g. "Wi-Fi", "Ethernet") to probe
+    # over in parallel. Empty = the previous behavior: one probe, unbound to
+    # any specific adapter, letting the OS pick the route.
+    interfaces: list[str] = field(default_factory=list)
 
     _source_path: Path = field(default=None, repr=False, compare=False)
     _created: bool = field(default=False, repr=False, compare=False)

@@ -31,7 +31,8 @@ from .i18n import (
     set_language,
     t,
 )
-from .monitor import LiveState, Monitor
+from .monitor import LiveState, MonitorGroup
+from .netiface import list_interfaces
 from .storage import Storage
 
 log = logging.getLogger("packetlizer.app")
@@ -71,6 +72,8 @@ def _open_path(path: Path) -> None:
 def _state_color(s: LiveState) -> tuple:
     if s.paused:
         return _BLUE
+    if s.link_down:
+        return _GREY
     if s.total == 0:
         return _GREY
     if s.in_outage:
@@ -83,9 +86,7 @@ def _state_color(s: LiveState) -> tuple:
 class TrayApp:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.state = LiveState()
-        self.monitor = Monitor(cfg, self.state)
-        self._mon_thread: threading.Thread | None = None
+        self.group = MonitorGroup(cfg)
         self._icon = None
         self._root = None
         self._report_busy = False
@@ -93,22 +94,21 @@ class TrayApp:
         # widgets whose text must be refreshed on a language change
         self._retext_map: list = []
 
+    @property
+    def state(self) -> LiveState:
+        """Aggregate view across every monitored interface, for the single
+        status indicator (dot/label/tray icon)."""
+        return self.group.aggregate
+
     # -- lifecycle --------------------------------------------------
     def start(self) -> int:
-        self._mon_thread = threading.Thread(target=self._run_monitor, name="monitor", daemon=True)
-        self._mon_thread.start()
+        self.group.start()
         try:
             import tkinter  # noqa: F401
         except Exception as e:  # pragma: no cover - Windows always ships tkinter
             log.warning("tkinter unavailable (%s); running with the tray menu only.", e)
             return self._run_menu_only()
         return self._run_with_window()
-
-    def _run_monitor(self):
-        try:
-            self.monitor.run()
-        except Exception:  # pragma: no cover
-            log.exception("Monitor crashed")
 
     # ------------------------------------------------------------------
     # main mode: tkinter window + pystray icon on a thread
@@ -120,8 +120,8 @@ class TrayApp:
 
         self._root = root = tk.Tk()
         root.title("PacketLizer")
-        root.geometry("600x580")
-        root.minsize(560, 520)
+        root.geometry("600x680")
+        root.minsize(560, 600)
         root.resizable(True, True)
         root.protocol("WM_DELETE_WINDOW", self._hide_window)
         # Show in the taskbar while visible; drop off it when minimized
@@ -203,6 +203,20 @@ class TrayApp:
                                      wraplength=540, justify="left")
         self._cfg_status.pack(anchor="w", fill="x")
 
+        # ---- network interfaces (multi-select) -------------------
+        ifaces = ttk.LabelFrame(root, text="")
+        ifaces.pack(side="top", fill="x", **pad)
+        ifaces.columnconfigure(0, weight=1)
+        self._lf_interfaces = ifaces
+        self._iface_hint = ttk.Label(ifaces, text="", foreground="#6b7280", wraplength=540, justify="left")
+        self._iface_hint.grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 2))
+        self._iface_listbox = tk.Listbox(ifaces, selectmode="multiple", exportselection=False, height=4)
+        self._iface_listbox.grid(row=1, column=0, sticky="ew", padx=(8, 4), pady=(0, 6))
+        self._iface_refresh_btn = ttk.Button(ifaces, text="", command=self._on_refresh_interfaces)
+        self._iface_refresh_btn.grid(row=1, column=1, sticky="n", padx=(0, 8), pady=(0, 6))
+        self._iface_names: list[str] = []
+        self._populate_interfaces_listbox()
+
         # ---- live status (two columns) ---------------------------
         info = ttk.LabelFrame(root, text="")
         info.pack(side="top", fill="x", **pad)
@@ -225,6 +239,11 @@ class TrayApp:
         sfield("win.status.loss", "loss", 2, 0)
         sfield("win.status.outages", "outages", 2, 2)
         sfield("win.status.monitoring_for", "uptime", 3, 0)
+        self._iface_status_var = tk.StringVar(value="")
+        self._iface_status_lbl = ttk.Label(info, textvariable=self._iface_status_var,
+                                           foreground="#6b7280", justify="left")
+        self._iface_status_lbl.grid(row=4, column=0, columnspan=4, sticky="w", padx=(8, 8), pady=(4, 2))
+        self._iface_status_lbl.grid_remove()  # only shown with >1 interface selected
 
         # ---- report ---------------------------------------------
         rep = ttk.LabelFrame(root, text="")
@@ -285,6 +304,9 @@ class TrayApp:
         if not r:
             return
         self._lf_config.config(text=t("win.section.config"))
+        self._lf_interfaces.config(text=t("win.section.interfaces"))
+        self._iface_hint.config(text=t("win.hint.interfaces"))
+        self._iface_refresh_btn.config(text=t("win.btn.refresh_interfaces"))
         self._lf_status.config(text=t("win.section.status"))
         self._lf_report.config(text=t("win.section.report"))
         for key, lbl in self._field_labels.items():
@@ -366,9 +388,10 @@ class TrayApp:
         self._info_vars["loss"].set(t("win.value.loss_fmt", pct=s.loss_pct, lost=s.lost, total=s.total))
         self._info_vars["outages"].set(str(s.outages))
         self._info_vars["uptime"].set(humanize_seconds(time.time() - s.started_at))
-        self._pause_btn.config(text=t("win.btn.resume") if self.monitor.is_paused else t("win.btn.pause"))
+        self._pause_btn.config(text=t("win.btn.resume") if self.group.is_paused else t("win.btn.pause"))
         if self._autostart_var.get() != self._autostart_enabled():
             self._autostart_var.set(self._autostart_enabled())
+        self._update_iface_status()
 
         try:
             self._icon.icon = _make_icon_image(col)
@@ -400,7 +423,7 @@ class TrayApp:
 
     # -- actions -----------------------------------------------
     def _on_toggle_pause(self, *_):
-        paused = self.monitor.toggle_pause()
+        paused = self.group.toggle_pause()
         self._notify(t("notify.paused") if paused else t("notify.resumed"))
 
     def _autostart_enabled(self) -> bool:
@@ -423,6 +446,50 @@ class TrayApp:
                 self._notify(t("notify.autostart_on") if want else t("notify.autostart_off"))
         # reflect the real state back into the checkbox
         self._autostart_var.set(self._autostart_enabled())
+
+    # -- network interfaces -------------------------------------------
+    def _populate_interfaces_listbox(self) -> None:
+        """(Re)fill the multi-select from what's currently detected, keeping
+        whatever is already selected (by name) or, on first build, whatever
+        is saved in the config."""
+        selected_names = set(self._selected_interfaces()) if self._iface_names else set(self.cfg.interfaces)
+        detected = list_interfaces()
+        # Keep configured names that aren't currently detected (e.g. a USB
+        # adapter that's unplugged right now) so the selection isn't lost.
+        known_names = {i.name for i in detected}
+        extra = [n for n in selected_names if n not in known_names]
+
+        self._iface_listbox.delete(0, "end")
+        self._iface_names = [i.name for i in detected] + extra
+        for i in detected:
+            self._iface_listbox.insert("end", i.label)
+        for n in extra:
+            self._iface_listbox.insert("end", t("win.value.iface_unavailable_fmt", name=n))
+        for idx, name in enumerate(self._iface_names):
+            if name in selected_names:
+                self._iface_listbox.selection_set(idx)
+
+    def _on_refresh_interfaces(self, *_):
+        self._populate_interfaces_listbox()
+
+    def _selected_interfaces(self) -> list[str]:
+        return [self._iface_names[i] for i in self._iface_listbox.curselection()]
+
+    def _update_iface_status(self) -> None:
+        """Small per-interface breakdown line, shown only when >1 interface
+        is actively selected (the single-interface / default case is already
+        fully covered by the main status block above)."""
+        states = self.group.states
+        if len(states) <= 1:
+            self._iface_status_lbl.grid_remove()
+            return
+        parts = []
+        for name, s in states.items():
+            label = name or t("rpt.unbound_iface")
+            state_txt = t("state." + s.state_key)
+            parts.append(t("win.value.iface_status_fmt", name=label, state=state_txt, pct=s.loss_pct))
+        self._iface_status_var.set("  |  ".join(parts))
+        self._iface_status_lbl.grid()
 
     # -- auto-update -------------------------------------------------
     def _check_for_update_async(self):
@@ -503,7 +570,10 @@ class TrayApp:
                     win.after(0, self._on_quit_for_update)
                 except Exception as e:  # pragma: no cover - network/filesystem edge cases
                     log.exception("Auto-update failed")
-                    win.after(0, lambda: status_var.set(t("dlg.update_failed", err=e)))
+                    # "as e" is cleared when the except block exits, so capture the
+                    # message now -- the lambda below only runs later, on the Tk loop.
+                    err_msg = str(e)
+                    win.after(0, lambda: status_var.set(t("dlg.update_failed", err=err_msg)))
                     win.after(0, lambda: (update_btn.config(state="normal"), later_btn.config(state="normal")))
 
             threading.Thread(target=work, name="update-download", daemon=True).start()
@@ -525,7 +595,7 @@ class TrayApp:
         self._notify(t("notify.update_restarting"))
         self._shutting_down = True
         self._persist_config_on_exit()
-        self.monitor.request_stop()
+        self.group.request_stop()
         try:
             if self._icon:
                 self._icon.visible = False
@@ -560,19 +630,22 @@ class TrayApp:
             raise ValueError(t("dlg.invalid_retention_neg"))
         return {"target": target, "interval_seconds": interval, "timeout_ms": timeout,
                 "outage_min_consecutive": omin, "retention_days": ret,
-                "language": self._lang_codes[self._lang_combo.current()]}
+                "language": self._lang_codes[self._lang_combo.current()],
+                "interfaces": self._selected_interfaces()}
 
     def _apply_fields_to_cfg(self, vals: dict) -> bool:
-        """Copy values into self.cfg. Returns True if target/interval/timeout changed."""
+        """Copy values into self.cfg. Returns True if target/interval/timeout/interfaces changed."""
         changed_probe = (vals["target"] != self.cfg.target
                          or vals["interval_seconds"] != self.cfg.interval_seconds
-                         or vals["timeout_ms"] != self.cfg.timeout_ms)
+                         or vals["timeout_ms"] != self.cfg.timeout_ms
+                         or vals["interfaces"] != self.cfg.interfaces)
         self.cfg.target = vals["target"]
         self.cfg.interval_seconds = vals["interval_seconds"]
         self.cfg.timeout_ms = vals["timeout_ms"]
         self.cfg.outage_min_consecutive = vals["outage_min_consecutive"]
         self.cfg.retention_days = vals["retention_days"]
         self.cfg.language = vals.get("language", self.cfg.language)
+        self.cfg.interfaces = vals["interfaces"]
         return changed_probe
 
     def _on_apply_config(self, *_):
@@ -613,13 +686,10 @@ class TrayApp:
             log.warning("Could not save the configuration on exit.")
 
     def _restart_monitor(self):
-        self.monitor.request_stop()
-        if self._mon_thread:
-            self._mon_thread.join(timeout=8)
-        self.state = LiveState()
-        self.monitor = Monitor(self.cfg, self.state)
-        self._mon_thread = threading.Thread(target=self._run_monitor, name="monitor", daemon=True)
-        self._mon_thread.start()
+        self.group.request_stop()
+        self.group.join(timeout=8)
+        self.group = MonitorGroup(self.cfg)
+        self.group.start()
 
     # -- data & logs maintenance -----------------------------------
     def _db_targets(self) -> list:
@@ -633,17 +703,14 @@ class TrayApp:
     def _run_db_op(self, fn):
         """Stop the monitor, run ``fn(storage)`` with exclusive DB access, then
         start a fresh monitor (which also resets the session counters)."""
-        self.monitor.request_stop()
-        if self._mon_thread:
-            self._mon_thread.join(timeout=8)
+        self.group.request_stop()
+        self.group.join(timeout=8)
         try:
             with Storage(self.cfg.resolved_db_path()) as st:
                 return fn(st)
         finally:
-            self.state = LiveState()
-            self.monitor = Monitor(self.cfg, self.state)
-            self._mon_thread = threading.Thread(target=self._run_monitor, name="monitor", daemon=True)
-            self._mon_thread.start()
+            self.group = MonitorGroup(self.cfg)
+            self.group.start()
 
     def _on_clear_logs(self, *_):
         from tkinter import messagebox
@@ -778,9 +845,8 @@ class TrayApp:
         self._shutting_down = True
         log.info("Shutting down...")
         self._persist_config_on_exit()
-        self.monitor.request_stop()
-        if self._mon_thread:
-            self._mon_thread.join(timeout=8)
+        self.group.request_stop()
+        self.group.join(timeout=8)
         try:
             if self._icon:
                 self._icon.visible = False

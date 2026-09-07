@@ -105,16 +105,27 @@ class PingExeProbe:
 
     name = "ping"
 
-    def __init__(self, target: str, timeout_ms: int):
+    def __init__(self, target: str, timeout_ms: int, source: str | None = None):
         self.target = target
         self.timeout_ms = max(200, int(timeout_ms))
+        # Source IPv4 to bind the probe to a specific network adapter (e.g. the
+        # user selected Wi-Fi *and* Ethernet). None = let the OS pick the route.
+        self.source = source
 
     def _cmd(self) -> list[str]:
         if sys.platform.startswith("win"):
-            return ["ping", "-n", "1", "-w", str(self.timeout_ms), self.target]
+            cmd = ["ping", "-n", "1", "-w", str(self.timeout_ms)]
+            if self.source:
+                cmd += ["-S", self.source]
+            cmd.append(self.target)
+            return cmd
         secs = max(1, round(self.timeout_ms / 1000))
         wflag = "-W" if sys.platform == "linux" else "-t"
-        return ["ping", "-c", "1", wflag, str(secs), self.target]
+        cmd = ["ping", "-c", "1", wflag, str(secs)]
+        if self.source:
+            cmd += ["-I", self.source]
+        cmd.append(self.target)
+        return cmd
 
     def probe(self) -> ProbeResult:
         try:
@@ -139,16 +150,18 @@ class RawIcmpProbe:
 
     name = "icmp-raw"
 
-    def __init__(self, target: str, timeout_ms: int):
+    def __init__(self, target: str, timeout_ms: int, source: str | None = None):
         self.target = target
         self.timeout_s = max(0.2, timeout_ms / 1000)
+        self.source = source
 
     def probe(self) -> ProbeResult:
         from icmplib import ping as _ping
         from icmplib.exceptions import NameLookupError, SocketPermissionError
 
         try:
-            host = _ping(self.target, count=1, timeout=self.timeout_s, privileged=True)
+            host = _ping(self.target, count=1, timeout=self.timeout_s, privileged=True,
+                         source=self.source)
         except SocketPermissionError as e:
             raise PermissionError(str(e)) from e
         except NameLookupError:
@@ -161,11 +174,16 @@ class RawIcmpProbe:
         return ProbeResult(None, STATUS_TIMEOUT)
 
 
-def select_probe(target: str, timeout_ms: int, prefer_raw: bool = True):
-    """Return ``(probe, reason_key)`` where reason_key is one of the REASON_* keys."""
+def select_probe(target: str, timeout_ms: int, prefer_raw: bool = True, source: str | None = None):
+    """Return ``(probe, reason_key)`` where reason_key is one of the REASON_* keys.
+
+    ``source`` binds the probe to a specific local IPv4 (one network adapter)
+    instead of letting the OS pick the route -- used when the user selects
+    multiple interfaces to probe over in parallel.
+    """
     if prefer_raw and is_privileged():
         try:
-            p = RawIcmpProbe(target, timeout_ms)
+            p = RawIcmpProbe(target, timeout_ms, source=source)
             p.probe()  # smoke test
             return p, REASON_RAW_PRIVILEGED
         except PermissionError:
@@ -173,7 +191,7 @@ def select_probe(target: str, timeout_ms: int, prefer_raw: bool = True):
         except Exception:
             pass
     reason = REASON_PING_NO_ADMIN if not is_privileged() else REASON_PING_RAW_UNAVAILABLE
-    return PingExeProbe(target, timeout_ms), reason
+    return PingExeProbe(target, timeout_ms, source=source), reason
 
 
 def timed_probe(probe) -> tuple[ProbeResult, float]:

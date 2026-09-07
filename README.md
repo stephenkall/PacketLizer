@@ -56,6 +56,8 @@ stays around ~45 MB.
 | `python main.py --report --days 7` | Report for the last 7 days only |
 | `python main.py --report --since 2026-09-01 --until 2026-09-03` | Report for a date range |
 | `python main.py --export-csv --out data.csv` | Export every sample to CSV |
+| `python main.py --list-interfaces` | List detected network adapters (name/IP/status) |
+| `python main.py --monitor --interfaces "Wi-Fi,Ethernet"` | Probe over several adapters in parallel |
 | `python main.py --install-autostart` | Enable start-with-Windows (HKCU registry, no admin) |
 | `python main.py --install-autostart --startup-folder` | Same, via the Startup folder |
 | `python main.py --uninstall-autostart` | Disable start-with-Windows |
@@ -80,11 +82,17 @@ hidden. The window shows:
   IP)**, ping interval, per-ping timeout, number of consecutive losses that
   counts as an outage, history retention in days, a **language** selector, and a
   **"Start automatically with Windows"** checkbox. **Save & apply** writes
-  `config.json`; if the target/interval/timeout changed, the monitor restarts
-  automatically. The language switch takes effect immediately; the autostart
-  checkbox takes effect on click;
+  `config.json`; if the target/interval/timeout/interfaces changed, the monitor
+  restarts automatically. The language switch takes effect immediately; the
+  autostart checkbox takes effect on click;
+* a **network interfaces** multi-select listing every detected adapter (name +
+  IP). Pick none to let the OS choose the route (the default, single-probe
+  behavior), or pick several — e.g. Wi-Fi *and* Ethernet — to probe over each
+  one in parallel, in its own thread, with its own samples tagged by adapter.
+  **Refresh** re-scans if you plug in an adapter after opening the window;
 * target, probe method, last sample, loss %, outage count and how long it has
-  been monitoring;
+  been monitoring — plus one line per interface (loss % and state) whenever
+  more than one is selected;
 * **Pause / Resume** the monitoring (standby);
 * **Quit** (with confirmation);
 * **Generate report** with optional **start date** and **end date**: no start
@@ -117,6 +125,32 @@ At startup the program decides on its own:
 If raw ICMP loses permission at runtime, the monitor switches to `ping`
 automatically. The child `ping` process is launched hidden (CREATE_NO_WINDOW), so
 the windowed build never flashes a console window.
+
+## Sleep/wake and network changes
+
+Before every probe cycle, the monitor checks that there's an actual, usable
+connection (an adapter that's up with a real IP — a `169.254.x.x` APIPA
+address doesn't count) instead of firing blind. If none is available — the
+laptop just woke from sleep and Wi-Fi hasn't reassociated yet, an Ethernet
+cable is unplugged, a VPN adapter is mid-reconnect — probing pauses and
+**nothing is recorded** until the connection is back, so that window never
+shows up as packet loss in the report. The status indicator reads *"Waiting
+for network..."* while this is happening. This applies per adapter when you've
+selected specific network interfaces (below), and to "is there any usable
+adapter at all" otherwise.
+
+## Multiple network interfaces
+
+If your machine has more than one network adapter — say a Wi-Fi card and an
+Ethernet port — you can monitor over several of them **at the same time**:
+pick them in the **Network interfaces** list in the main window (or pass
+`--interfaces "Wi-Fi,Ethernet"` / set `interfaces` in `config.json`). Each
+selected adapter gets its own probe thread, bound to that adapter's IP, and
+its own samples (tagged by interface in the database). The generated report
+gets a **tab per interface** so you can flip between them; with zero or one
+interface selected (the default) the report looks exactly as before — no tab
+bar at all. `python main.py --list-interfaces` prints what's detected (name,
+IP, up/down) to help you pick the right names.
 
 ## Localization
 
